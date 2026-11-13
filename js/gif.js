@@ -74,10 +74,18 @@ function lzw(indices, out) {
   out.push(0);
 }
 
-// frames: ImageData[]; fps: number. onProgress(0..1). Returns a Blob.
-export async function encodeGIF(frames, fps, onProgress = () => {}) {
-  const w = frames[0].width, h = frames[0].height;
-  const pal = buildPalette(frames);
+// Options: { width, height, count, fps, getFrame(i) -> ImageData (may be async), colors, loop: 'forever'|'once'|number, onProgress }
+export async function encodeGIF(o) {
+  const { width: w, height: h, count, fps } = o;
+  const onProgress = o.onProgress || (() => {});
+  // Build the palette from a sample of frames so memory stays small.
+  const sampleIdx = [];
+  const want = Math.min(count, 12);
+  for (let k = 0; k < want; k++) sampleIdx.push(Math.floor((k * count) / want));
+  const samples = [];
+  for (const i of sampleIdx) samples.push(await o.getFrame(i));
+  const pal = buildPalette(samples, o.colors || 256);
+  samples.length = 0;
   const map = new Int16Array(32768).fill(-1);
   const nearest = (key) => {
     const r = ((key >> 10) & 31) * 8.226, g = ((key >> 5) & 31) * 8.226, b = (key & 31) * 8.226;
@@ -95,25 +103,28 @@ export async function encodeGIF(frames, fps, onProgress = () => {}) {
   u16(head, w); u16(head, h);
   head.push(0xf7, 0, 0);
   for (const p of pal) head.push(p[0], p[1], p[2]);
-  head.push(0x21, 0xff, 0x0b);
-  for (const ch of 'NETSCAPE2.0') head.push(ch.charCodeAt(0));
-  head.push(3, 1, 0, 0, 0);
+  if (o.loop !== 'once') {
+    head.push(0x21, 0xff, 0x0b);
+    for (const ch of 'NETSCAPE2.0') head.push(ch.charCodeAt(0));
+    const n = o.loop === 'forever' || o.loop == null ? 0 : Math.max(1, (+o.loop) - 1);
+    head.push(3, 1); u16(head, n); head.push(0);
+  }
   chunks.push(new Uint8Array(head));
   const idx = new Uint8Array(w * h);
-  for (let f = 0; f < frames.length; f++) {
-    const d = frames[f].data;
+  for (let f = 0; f < count; f++) {
+    const d = (await o.getFrame(f)).data;
     for (let i = 0, j = 0; j < idx.length; i += 4, j++) {
       const key = ((d[i] >> 3) << 10) | ((d[i + 1] >> 3) << 5) | (d[i + 2] >> 3);
       let m = map[key];
       if (m < 0) m = map[key] = nearest(key);
       idx[j] = m;
     }
-    const delay = Math.round(((f + 1) * 100) / fps) - Math.round((f * 100) / fps);
+    const delay = Math.max(2, Math.round(((f + 1) * 100) / fps) - Math.round((f * 100) / fps));
     const out = [0x21, 0xf9, 4, 0x04, delay & 255, (delay >> 8) & 255, 0, 0, 0x2c, 0, 0, 0, 0];
     u16(out, w); u16(out, h); out.push(0);
     lzw(idx, out);
     chunks.push(new Uint8Array(out));
-    onProgress((f + 1) / frames.length);
+    onProgress((f + 1) / count);
     await new Promise((r) => setTimeout(r, 0));
   }
   chunks.push(new Uint8Array([0x3b]));

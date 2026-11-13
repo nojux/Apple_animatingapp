@@ -19,13 +19,50 @@ function circlePts(x, y, r, n) {
   return out;
 }
 
+// Smooth curve through the input points (Catmull-Rom), with pressure carried along.
+function spline(pts, step) {
+  const n = pts.length;
+  if (n < 2) return pts.map((p) => p.slice());
+  const out = [];
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = pts[Math.max(i - 1, 0)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(i + 2, n - 1)];
+    const d = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+    const k = Math.max(1, Math.ceil(d / step));
+    for (let j = 0; j < k; j++) {
+      const t = j / k, t2 = t * t, t3 = t2 * t;
+      const c = (q) => 0.5 * (2 * p1[q] + (-p0[q] + p2[q]) * t + (2 * p0[q] - 5 * p1[q] + 4 * p2[q] - p3[q]) * t2 + (-p0[q] + 3 * p1[q] - 3 * p2[q] + p3[q]) * t3);
+      out.push([c(0), c(1), (p1[2] ?? 1) + ((p2[2] ?? 1) - (p1[2] ?? 1)) * t]);
+    }
+  }
+  out.push(pts[n - 1].slice());
+  return out;
+}
+
 // Variable-width outline polygon around a brush stroke's centre line.
 export function brushOutline(el) {
-  const pts = el.pts, n = pts.length;
-  if (!n) return [];
+  const raw = el.pts;
+  if (!raw.length) return [];
+  let len = 0;
+  for (let i = 1; i < raw.length; i++) len += Math.hypot(raw[i][0] - raw[i - 1][0], raw[i][1] - raw[i - 1][1]);
+  const step = Math.max(0.6, el.w / 10, len / 4000);
+  const pts = spline(raw, step), n = pts.length;
+  // Smooth pressure along the stroke so the edge never "beads" or steps.
+  const rad = new Array(n);
+  const R = Math.max(1, Math.min(40, Math.round(el.w / (1.5 * step))));
+  if (el.pr) {
+    let acc = 0, cnt = 0;
+    const pr = pts.map((p) => p[2]);
+    for (let i = -R; i < n; i++) {
+      if (i + R < n) { acc += pr[i + R]; cnt++; }
+      if (i - R - 1 >= 0) { acc -= pr[i - R - 1]; cnt--; }
+      if (i >= 0) rad[i] = Math.max(0.3, (el.w / 2) * (0.15 + 0.85 * (acc / cnt)));
+    }
+  } else rad.fill(Math.max(0.3, el.w / 2));
+  if (n === 1 || len < 0.5) return circlePts(raw[0][0], raw[0][1], Math.max(...rad), 16);
+  const T = 3;
   const normals = new Array(n).fill(null);
   for (let i = 0; i < n; i++) {
-    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)];
+    const a = pts[Math.max(0, i - T)], b = pts[Math.min(n - 1, i + T)];
     const dx = b[0] - a[0], dy = b[1] - a[1], d = Math.hypot(dx, dy);
     if (d > 1e-6) normals[i] = [-dy / d, dx / d];
   }
@@ -33,22 +70,22 @@ export function brushOutline(el) {
   for (let i = 0; i < n; i++) { if (normals[i]) last = normals[i]; else if (last) normals[i] = last; }
   last = null;
   for (let i = n - 1; i >= 0; i--) { if (normals[i]) last = normals[i]; else if (last) normals[i] = last; }
-  if (!normals[0]) return circlePts(pts[0][0], pts[0][1], radiusAt(el, 0), 14);
+  if (!normals[0]) return circlePts(raw[0][0], raw[0][1], rad[0], 16);
 
-  const L = [], R = [];
+  const L = [], Rt = [];
   for (let i = 0; i < n; i++) {
-    const r = radiusAt(el, i), [nx, ny] = normals[i], p = pts[i];
+    const r = rad[i], [nx, ny] = normals[i], p = pts[i];
     L.push([p[0] + nx * r, p[1] + ny * r]);
-    R.push([p[0] - nx * r, p[1] - ny * r]);
+    Rt.push([p[0] - nx * r, p[1] - ny * r]);
   }
-  const N = 6, poly = L.slice();
+  const N = 8, poly = L.slice();
   {
-    const p = pts[n - 1], r = radiusAt(el, n - 1), a = Math.atan2(normals[n - 1][1], normals[n - 1][0]);
+    const p = pts[n - 1], r = rad[n - 1], a = Math.atan2(normals[n - 1][1], normals[n - 1][0]);
     for (let k = 1; k < N; k++) { const g = a - (k * Math.PI) / N; poly.push([p[0] + Math.cos(g) * r, p[1] + Math.sin(g) * r]); }
   }
-  for (let i = n - 1; i >= 0; i--) poly.push(R[i]);
+  for (let i = n - 1; i >= 0; i--) poly.push(Rt[i]);
   {
-    const p = pts[0], r = radiusAt(el, 0), a = Math.atan2(normals[0][1], normals[0][0]);
+    const p = pts[0], r = rad[0], a = Math.atan2(normals[0][1], normals[0][0]);
     for (let k = 1; k < N; k++) { const g = a + Math.PI - (k * Math.PI) / N; poly.push([p[0] + Math.cos(g) * r, p[1] + Math.sin(g) * r]); }
   }
   return poly;

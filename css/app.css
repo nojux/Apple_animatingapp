@@ -116,7 +116,7 @@ input[type=range] { width: 100%; height: 30px; accent-color: var(--accent); }
 .tlName .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 4px; cursor: pointer; height: 100%; display: flex; align-items: center; }
 .tlRow.active .tlName { background: var(--panel3); }
 .tlRow.active .tlName .nm { color: var(--accent2); font-weight: 600; }
-.tlName button { width: 28px; height: 28px; min-height: 0; padding: 0; background: transparent; border: 0; color: var(--muted); }
+.tlName button { width: 26px; height: 28px; min-height: 0; padding: 0; background: transparent; border: 0; color: var(--muted); }
 .tlName button.off { opacity: .35; }
 .tlName button.lock.locked { color: var(--accent); }
 .tlName button svg.i { width: 17px; height: 17px; }
@@ -183,3 +183,53 @@ input[type=color] { height: 38px; width: 80px; padding: 2px; background: var(--p
   .choices { grid-template-columns: 1fr; }
 }
 @media (max-height: 700px) { #timeline { height: 190px; } }
+
+/* onion popover */
+.split { display: flex; gap: 1px; }
+.split .op:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.split .op.more { border-top-left-radius: 0; border-bottom-left-radius: 0; padding: 3px 5px; }
+.pop { position: fixed; z-index: 40; width: 330px; max-width: calc(100vw - 16px); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 4px 14px 14px; box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+.pop h4 { margin: 12px 0 6px; }
+.steppers { display: grid; grid-template-columns: 12px auto 34px 26px 34px; gap: 6px 8px; align-items: center; }
+.steppers button { min-height: 30px; padding: 0; }
+.steppers b { text-align: center; }
+.dot { width: 10px; height: 10px; border-radius: 50%; }
+.dot.red { background: #ff3b30; } .dot.green { background: #22b14c; }
+.tlName button.oni { opacity: .3; }
+.tlName button.oni.on { opacity: 1; color: #ff8a7a; }
+
+/* export */
+dialog.wide { width: min(920px, 96vw); }
+.exLayout { display: grid; grid-template-columns: 230px 1fr; gap: 16px; }
+.fmtList { display: flex; flex-direction: column; gap: 6px; }
+.fmtList button { flex-direction: column; align-items: flex-start; text-align: left; gap: 2px; padding: 10px 12px; border-radius: 12px; }
+.fmtList button span { color: var(--muted); font-size: 12px; font-weight: 400; }
+.fmtList button.on { background: #3a2a24; border-color: var(--accent); color: var(--text); }
+.exSettings { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.exGroup { border: 1px solid var(--line); border-radius: 12px; padding: 0 12px 12px; background: #1b1b21; }
+.exGroup h4 { margin: 10px 0 8px; }
+.exGroup label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 13px; }
+.exGroup label > select, .exGroup label > input { color: var(--text); }
+.exGroup .full { width: 100%; margin-bottom: 8px; }
+.exGroup .row2 { margin-bottom: 8px; }
+.sizeRow { display: grid; grid-template-columns: 1fr 40px 1fr; gap: 8px; align-items: end; margin-bottom: 8px; }
+.sizeRow input { width: 100%; }
+.link { padding: 0; height: 34px; }
+.link.on { background: var(--accent); border-color: var(--accent); color: #1a0d06; }
+.seg button.on { background: var(--accent); color: #1a0d06; }
+.seg { margin-bottom: 8px; }
+.bgRow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.bgRow .seg { margin: 0; flex: 1; min-width: 260px; }
+.exFoot { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+#exSummary { flex: 1; color: var(--muted); font-size: 13px; }
+#exGo { min-width: 140px; min-height: 44px; font-size: 16px; }
+@media (max-width: 760px) {
+  .exLayout { grid-template-columns: 1fr; }
+  .fmtList { flex-direction: row; overflow-x: auto; }
+  .fmtList button { flex: none; width: 150px; }
+}
+dialog.wide { padding-bottom: 0; }
+.exFoot { position: sticky; bottom: 0; background: var(--panel); padding-bottom: 14px; z-index: 2; }
+#exWork, #exDone { padding-bottom: 16px; }
+.exGroup h4 { margin: 8px 0 6px; }
+.exGroup { padding-bottom: 8px; }

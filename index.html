@@ -117,7 +117,7 @@
         </select>
       </div>
       <div class="grp">
-        <button class="op" id="tOnion" title="Onion skin: see neighbouring frames"><span data-icon="onion"></span><span>Onion</span></button>
+        <div class="split"><button class="op" id="tOnion" title="Onion skin: see neighbouring frames"><span data-icon="onion"></span><span>Onion</span></button><button class="op more" id="tOnionMenu" title="Onion skin options"><span data-icon="down"></span><span>Options</span></button></div>
         <button class="op" id="tLoop" title="Loop playback"><span data-icon="loop"></span><span>Loop</span></button>
         <label class="fps">FPS <input type="number" id="fps" min="1" max="60" inputmode="numeric"></label>
       </div>
@@ -127,6 +127,21 @@
 </div>
 
 <div id="toast"></div>
+
+<div id="onionPop" class="pop" hidden>
+  <h4>Onion skin shows</h4>
+  <div class="seg"><button data-ol="all">All layers</button><button data-ol="current">Current layer</button><button data-ol="chosen">Chosen layers</button></div>
+  <p class="hint">“Chosen layers”: tap the onion icon next to each layer name in the timeline.</p>
+  <h4>Draw it</h4>
+  <div class="seg"><button data-of="0">Behind drawings</button><button data-of="1">In front</button></div>
+  <h4>Frames</h4>
+  <div class="steppers">
+    <span class="dot red"></span><span>Before</span><button data-os="onionPrev:-1">−</button><b id="onPrevN">2</b><button data-os="onionPrev:1">+</button>
+    <span class="dot green"></span><span>After</span><button data-os="onionNext:-1">−</button><b id="onNextN">1</b><button data-os="onionNext:1">+</button>
+  </div>
+  <h4>Strength</h4>
+  <input type="range" id="onionOpacity" min="10" max="80">
+</div>
 
 <dialog id="dlgProjects">
   <div class="dlgHead"><h2>Your animations</h2><button class="x" data-close>✕</button></div>
@@ -173,24 +188,69 @@
   <div class="dlgFoot"><button class="primary" id="sApply">Done</button></div>
 </dialog>
 
-<dialog id="dlgExport">
+<dialog id="dlgExport" class="wide">
   <div class="dlgHead"><h2>Export</h2><button class="x" data-close>✕</button></div>
-  <div id="exChoose">
-    <div class="choices">
-      <label><input type="radio" name="fmt" value="gif" checked><b>GIF</b><span>Looping animation, great for sharing</span></label>
-      <label><input type="radio" name="fmt" value="video"><b>Video</b><span id="vidDesc">MP4 video, plays back in real time while exporting</span></label>
-      <label><input type="radio" name="fmt" value="pngseq"><b>PNG sequence</b><span>Every frame as an image, in a .zip</span></label>
-      <label><input type="radio" name="fmt" value="png"><b>PNG image</b><span>Just the current frame</span></label>
-      <label><input type="radio" name="fmt" value="svganim"><b>Animated SVG</b><span>Vector animation for the web</span></label>
-      <label><input type="radio" name="fmt" value="svg"><b>SVG image</b><span>Current frame as editable vectors</span></label>
-      <label><input type="radio" name="fmt" value="project"><b>Project file</b><span>Backup you can open again later (.inkframe)</span></label>
+  <div id="exChoose" class="exLayout">
+    <div id="exFormats" class="fmtList"></div>
+    <div class="exSettings">
+      <div class="exGroup" data-show="size">
+        <h4>Resolution</h4>
+        <label class="full">Preset <select id="exPreset"></select></label>
+        <div class="sizeRow">
+          <label>Width <input id="exW" type="number" min="2" max="7680" inputmode="numeric"></label>
+          <button id="exLink" class="link" title="Keep proportions"><svg class="i" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg></button>
+          <label>Height <input id="exH" type="number" min="2" max="7680" inputmode="numeric"></label>
+        </div>
+        <label class="full" id="exFitRow" data-show="fitrow">Canvas shape differs, so
+          <select id="exFit"><option value="fit">Fit inside (adds bars)</option><option value="fill">Fill frame (crops edges)</option><option value="stretch">Stretch</option></select>
+        </label>
+      </div>
+      <div class="exGroup" data-show="fps range">
+        <h4>Timing</h4>
+        <div class="row2">
+          <label data-show="fps">Frame rate <select id="exFps"></select></label>
+          <label data-show="video">Play it <select id="exRepeat"><option value="1">Once</option><option value="2">2 times</option><option value="3">3 times</option><option value="5">5 times</option><option value="10">10 times</option></select></label>
+        </div>
+        <div data-show="range">
+          <div class="seg" data-key="range"><button data-v="all">All frames</button><button data-v="custom">Choose frames</button></div>
+          <div class="row2" id="exRangeCustom"><label>From frame <input id="exFrom" type="number" min="1" inputmode="numeric"></label><label>To frame <input id="exTo" type="number" min="1" inputmode="numeric"></label></div>
+        </div>
+      </div>
+      <div class="exGroup" data-show="video">
+        <h4>Video</h4>
+        <div class="row2">
+          <label>Codec <select id="exCodec"><option value="avc">H.264 (plays everywhere)</option><option value="hevc">H.265 / HEVC (smaller files)</option></select></label>
+          <label>Quality <select id="exQuality"><option value="low">Low (smallest)</option><option value="medium">Medium</option><option value="high">High</option><option value="max">Maximum</option></select></label>
+        </div>
+      </div>
+      <div class="exGroup" data-show="gif">
+        <h4>GIF</h4>
+        <div class="row2">
+          <label>Colours <select id="exColors"><option value="256">256 (best)</option><option value="128">128</option><option value="64">64</option><option value="32">32 (smallest)</option></select></label>
+          <label>Loop <select id="exLoop"><option value="forever">Forever</option><option value="once">Play once</option><option value="3">3 times</option></select></label>
+        </div>
+      </div>
+      <div class="exGroup" data-show="img">
+        <h4>Image</h4>
+        <div class="row2">
+          <label>Type <select id="exImg"><option value="png">PNG (lossless)</option><option value="jpeg">JPEG (smaller)</option></select></label>
+          <label data-show="jpgq">JPEG quality <span id="exJpgQv"></span><input type="range" id="exJpgQ" min="40" max="100"></label>
+        </div>
+      </div>
+      <div class="exGroup" data-show="bg">
+        <h4>Background</h4>
+        <div class="bgRow">
+          <div class="seg" data-key="bg" id="exBgSeg"><button data-v="project">Canvas colour</button><button data-v="transparent">Transparent</button><button data-v="custom">Other colour</button></div>
+          <input type="color" id="exBgColor">
+        </div>
+      </div>
+      <div class="exGroup" data-show="size none">
+        <h4>File name</h4>
+        <input id="exName" type="text" class="full">
+      </div>
     </div>
-    <div class="form inline">
-      <label>Size <select id="exScale"><option value="0.25">25%</option><option value="0.5">50%</option><option value="1" selected>100%</option><option value="2">200%</option></select></label>
-      <label class="toggle"><input type="checkbox" id="exTransparent"><span>Transparent background (PNG)</span></label>
-    </div>
-    <div class="dlgFoot"><button class="primary" id="exGo">Export</button></div>
   </div>
+  <div class="exFoot" id="exFoot"><div id="exSummary"></div><button class="primary" id="exGo">Export</button></div>
   <div id="exWork" hidden>
     <p id="exStatus">Working…</p>
     <div class="bar"><div id="exBar"></div></div>
@@ -199,7 +259,7 @@
     <div id="exPreview"></div>
     <p class="hint" id="exInfo"></p>
     <div class="dlgFoot">
-      <button id="exBack">Back</button>
+      <button id="exBack">Back to settings</button>
       <a class="btn" id="exDownload" download>Download</a>
       <button class="primary" id="exShare">Save / Share…</button>
     </div>
@@ -211,7 +271,7 @@
   <div class="help">
     <p><b>Draw</b> with Apple Pencil. Once the Pencil is used, your fingers only move and zoom, so your palm won't leave marks.</p>
     <p><b>Gestures:</b> pinch to zoom, drag with two fingers to move, <b>two-finger tap to undo</b>, three-finger tap to redo.</p>
-    <p><b>Frame by frame:</b> draw, then tap <b>Next blank</b> to move on and draw the next drawing. Onion skin shows the previous frame in red and the next one in green.</p>
+    <p><b>Frame by frame:</b> draw, then tap <b>Next blank</b> to move on and draw the next drawing. Onion skin shows the previous frame in red and the next one in green. Tap <b>Options</b> next to Onion to show it for just the current layer, or draw it in front of everything.</p>
     <p><b>Hold a drawing longer:</b> tap <b>Hold +1</b> to add a frame after the current one.</p>
     <p><b>Tweens:</b> draw on frame 1. Tap a later frame and tap <b>Keyframe</b>. Move, resize or reshape the drawing there with the Select tool. Go back to frame 1 and tap <b>Tween</b>. The frames in between are filled in automatically.</p>
     <p><b>Layers:</b> use the buttons at the top-left of the timeline. Tap a layer's name to choose it, double-tap to rename. The eye hides it and the lock protects it.</p>

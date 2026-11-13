@@ -18,7 +18,7 @@ const prefs = loadPrefs();
 function loadPrefs() {
   const d = {
     tool: 'brush', color: '#1d1d24', recent: [], finger: 'auto', autoKey: true, onionPrev: 2, onionNext: 1,
-    onion: true, loop: true, eraserMode: 'partial', shapeFill: false, helpSeen: false,
+    onion: true, onionLayers: 'all', onionFront: false, onionOpacity: 35, loop: true, eraserMode: 'partial', shapeFill: false, helpSeen: false,
     tools: {
       brush: { size: 8, opacity: 100, smoothing: 45, pressure: true },
       pen: { size: 3, opacity: 100, smoothing: 30 },
@@ -184,6 +184,7 @@ function drawFrame(c, f, withBg, opts = {}) {
   if (withBg) { c.fillStyle = p.bg; c.fillRect(0, 0, p.w, p.h); }
   for (const L of p.layers) {
     if (!L.visible && !opts.includeHidden) continue;
+    if (opts.only && !opts.only(L)) continue;
     for (const el of contentAt(L, f)) drawEl(c, el, opts.alpha ?? 1);
   }
 }
@@ -205,14 +206,23 @@ function render() {
   ctx.restore();
   ctx.save();
   ctx.beginPath(); ctx.rect(0, 0, p.w, p.h); ctx.clip();
-  if (prefs.onion && !S.playing) {
-    for (let d = prefs.onionPrev; d >= 1; d--) onion(S.cur - d, '#ff3b30', 0.32 / d);
-    for (let d = prefs.onionNext; d >= 1; d--) onion(S.cur + d, '#22b14c', 0.32 / d);
-  }
+  const showOnion = prefs.onion && !S.playing;
+  if (showOnion && !prefs.onionFront) drawOnions();
   drawFrame(ctx, S.cur, false);
+  if (showOnion && prefs.onionFront) drawOnions();
   ctx.restore();
   drawSelection();
   $('#zoomInfo').textContent = Math.round(S.view.s * 100) + '%';
+}
+function onionFilter() {
+  if (prefs.onionLayers === 'current') { const A = activeLayer(); return (L) => L === A; }
+  if (prefs.onionLayers === 'chosen') return (L) => L.onion !== false;
+  return null;
+}
+function drawOnions() {
+  const k = (prefs.onionOpacity ?? 35) / 100;
+  for (let d = prefs.onionPrev; d >= 1; d--) onion(S.cur - d, '#ff3b30', k / Math.sqrt(d));
+  for (let d = prefs.onionNext; d >= 1; d--) onion(S.cur + d, '#22b14c', k / Math.sqrt(d));
 }
 function onion(f, color, alpha) {
   const p = S.proj;
@@ -223,7 +233,8 @@ function onion(f, color, alpha) {
   tctx.globalCompositeOperation = 'source-over';
   tctx.clearRect(0, 0, tint.width, tint.height);
   setView(tctx);
-  drawFrame(tctx, f, false);
+  const only = onionFilter();
+  drawFrame(tctx, f, false, only ? { only } : {});
   tctx.setTransform(1, 0, 0, 1, 0, 0);
   tctx.globalCompositeOperation = 'source-in';
   tctx.globalAlpha = 1;
@@ -371,9 +382,13 @@ for (const t of ['gesturestart', 'gesturechange', 'gestureend']) document.addEve
 /* ---------------------------------------------------------------- tools */
 
 const T = () => prefs.tools[prefs.tool] || {};
-function pressureOf(e) {
-  if (e.pointerType === 'pen') return clamp(e.pressure || 0.05, 0.05, 1);
-  return 1;
+let lastPressure = 0.5;
+function pressureOf(e, start = false) {
+  if (e.pointerType !== 'pen') return 1;
+  // Safari sometimes reports 0 mid-stroke; reuse the last real value instead of dropping to nothing.
+  if (e.pressure > 0) lastPressure = start ? e.pressure : lastPressure * 0.4 + e.pressure * 0.6;
+  else if (start) lastPressure = 0.3;
+  return clamp(lastPressure, 0.05, 1);
 }
 
 function startAction(e, x, y) {
@@ -382,7 +397,7 @@ function startAction(e, x, y) {
   action = { id: e.pointerId, tool, touch: e.pointerType === 'touch', x0: sx, y0: sy, sx: x, sy: y };
   if (tool === 'brush' || tool === 'pen') {
     if (!canEdit()) { action = null; return; }
-    action.pts = [[sx, sy, pressureOf(e)]];
+    action.pts = [[sx, sy, pressureOf(e, true)]];
     action.last = [sx, sy];
     drawLive();
   } else if (tool === 'line' || tool === 'rect' || tool === 'ellipse') {
@@ -410,10 +425,11 @@ function moveAction(evs) {
       const k = 1 - sm * 0.88;
       const nx = a.last[0] + (sx - a.last[0]) * k, ny = a.last[1] + (sy - a.last[1]) * k;
       const lp = a.pts[a.pts.length - 1];
-      const minD = 0.8 / S.view.s;
-      if (Math.hypot(nx - lp[0], ny - lp[1]) >= minD) a.pts.push([nx, ny, pressureOf(e)]);
+      const minD = 1 / S.view.s;
+      const pr = pressureOf(e);
+      if (Math.hypot(nx - lp[0], ny - lp[1]) >= minD) a.pts.push([nx, ny, pr]);
       a.last = [nx, ny];
-      a.raw = [sx, sy, pressureOf(e)];
+      a.raw = [sx, sy, pr];
     } else if (a.tool === 'line' || a.tool === 'rect' || a.tool === 'ellipse') {
       a.x1 = sx; a.y1 = sy;
     } else if (a.tool === 'eraser') {
@@ -638,6 +654,7 @@ function renderTimeline() {
     h += `<div class="tlRow${li === S.layer ? ' active' : ''}" data-l="${li}"><div class="tlName">` +
       `<button class="vis${L.visible ? '' : ' off'}" data-lv="${li}" title="Show / hide">${icon(L.visible ? 'eye' : 'eyeoff')}</button>` +
       `<button class="lock${L.locked ? ' locked' : ''}" data-lk="${li}" title="Lock">${icon(L.locked ? 'lock' : 'unlock')}</button>` +
+      `<button class="oni${onionOn(L) ? ' on' : ''}" data-lo="${li}" title="Show onion skin for this layer">${icon('onion')}</button>` +
       `<span class="nm" data-ln="${li}">${esc(L.name)}</span></div>`;
     const keys = sortedKeys(L);
     let ki = -1;
@@ -663,6 +680,12 @@ function renderTimeline() {
   grid.innerHTML = h;
   grid.style.width = 170 + total * cellWidth() + 'px';
   updatePlayhead();
+}
+function onionOn(L) {
+  if (!prefs.onion) return false;
+  if (prefs.onionLayers === 'current') return L === activeLayer();
+  if (prefs.onionLayers === 'chosen') return L.onion !== false;
+  return true;
 }
 function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function updatePlayhead(scrollIntoView = true) {
@@ -700,12 +723,19 @@ function goto(f, keepSel = false) {
 // Tap on a cell / name; double-tap a name to rename.
 let lastNameTap = { li: -1, t: 0 };
 grid.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-la],[data-lv],[data-lk],[data-ln],[data-f]');
+  const t = e.target.closest('[data-la],[data-lv],[data-lk],[data-lo],[data-ln],[data-f]');
   if (!t) return;
   if (S.playing) stop();
   const p = S.proj;
   if (t.dataset.la) return layerAction(t.dataset.la);
   if (t.dataset.lv) { const L = p.layers[+t.dataset.lv]; L.visible = !L.visible; S.sel = []; return changed(true); }
+  if (t.dataset.lo) {
+    const L = p.layers[+t.dataset.lo];
+    if (prefs.onionLayers !== 'chosen') { p.layers.forEach((x) => { x.onion = onionOn(x); }); prefs.onionLayers = 'chosen'; }
+    if (!prefs.onion) { prefs.onion = true; p.layers.forEach((x) => { x.onion = x === L; }); }
+    else L.onion = L.onion === false;
+    savePrefs(); syncOnionPop(); return changed(true);
+  }
   if (t.dataset.lk) { const L = p.layers[+t.dataset.lk]; L.locked = !L.locked; return changed(true); }
   if (t.dataset.ln) {
     const li = +t.dataset.ln, now = Date.now();
@@ -1043,37 +1073,105 @@ $('#sApply').onclick = () => {
 
 const safeName = (s) => (s || 'animation').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'animation';
 let exportResult = null;
+const canvasBlob = (c, type = 'image/png', q) => new Promise((r) => c.toBlob(r, type, q));
+const tick = () => new Promise((r) => setTimeout(r, 0));
 
-function renderFrameCanvas(f, scale, transparent = false) {
-  const p = S.proj;
-  const c = document.createElement('canvas');
-  c.width = Math.max(1, Math.round(p.w * scale)); c.height = Math.max(1, Math.round(p.h * scale));
-  const x = c.getContext('2d');
-  x.setTransform(scale, 0, 0, scale, 0, 0);
-  drawFrame(x, f, !transparent);
-  return c;
+const FORMATS = {
+  video: { label: 'Video', sub: 'MP4 · H.264 or H.265', size: 1, fps: 1, range: 1, video: 1, bg: ['project', 'custom'] },
+  gif: { label: 'GIF', sub: 'Looping animation for chats and the web', size: 1, fps: 1, range: 1, gif: 1, bg: ['project', 'custom'] },
+  seq: { label: 'Image sequence', sub: 'Every frame as PNG or JPEG, in a .zip', size: 1, fps: 1, range: 1, img: 1, bg: ['project', 'transparent', 'custom'] },
+  still: { label: 'Still image', sub: 'The current frame as PNG or JPEG', size: 1, img: 1, bg: ['project', 'transparent', 'custom'] },
+  svganim: { label: 'Animated SVG', sub: 'Sharp vector animation for websites', size: 1, range: 1, bg: ['project', 'transparent', 'custom'] },
+  svg: { label: 'SVG frame', sub: 'The current frame as editable vectors', size: 1, bg: ['project', 'transparent', 'custom'] },
+  project: { label: 'Project file', sub: 'Backup to open again later (.inkframe)' },
+};
+const PRESETS = [
+  ['project', 'Same as canvas'], ['half', 'Half size'], ['1080p', 'Full HD · 1920 × 1080', 1920, 1080], ['720p', 'HD · 1280 × 720', 1280, 720],
+  ['4k', '4K UHD · 3840 × 2160', 3840, 2160], ['square', 'Square · 1080 × 1080', 1080, 1080], ['vertical', 'Vertical / Stories · 1080 × 1920', 1080, 1920],
+  ['portrait', 'Portrait 4:5 · 1080 × 1350', 1080, 1350], ['small', 'Small · 480 wide', 480], ['custom', 'Custom size'],
+];
+const QUALITY = { low: 0.04, medium: 0.08, high: 0.15, max: 0.3 };
+const EX_DEFAULT = {
+  fmt: 'video', preset: 'project', w: 0, h: 0, link: true, fit: 'fit', fps: 0, range: 'all', from: 1, to: 0,
+  quality: 'high', codec: 'avc', repeat: 1, colors: 256, loop: 'forever', bg: 'project', bgColor: '#ffffff', img: 'png', jpgQ: 90,
+};
+const X = () => prefs.exp;
+
+function presetSize(id) {
+  const p = S.proj, pr = PRESETS.find((x) => x[0] === id);
+  if (id === 'project') return [p.w, p.h];
+  if (id === 'half') return [Math.round(p.w / 2), Math.round(p.h / 2)];
+  if (id === 'small') return [480, Math.round((480 * p.h) / p.w)];
+  if (pr && pr[2]) return [pr[2], pr[3]];
+  return [X().w || p.w, X().h || p.h];
 }
-const canvasBlob = (c, type = 'image/png') => new Promise((r) => c.toBlob(r, type));
+function outSize() {
+  let [w, h] = X().preset === 'custom' ? [X().w, X().h] : presetSize(X().preset);
+  w = clamp(Math.round(w) || S.proj.w, 2, 7680); h = clamp(Math.round(h) || S.proj.h, 2, 7680);
+  if (X().fmt === 'video') { w = Math.round(w / 2) * 2; h = Math.round(h / 2) * 2; }
+  return [w, h];
+}
+const outFps = () => (FORMATS[X().fmt].fps && X().fps) || S.proj.fps;
+function outRange() {
+  const n = S.proj.frameCount;
+  if (X().range !== 'custom') return [0, n - 1];
+  const a = clamp(Math.round(X().from) - 1, 0, n - 1), b = clamp(Math.round(X().to || n) - 1, 0, n - 1);
+  return a <= b ? [a, b] : [b, a];
+}
+// Project frame for every output frame, after frame-rate conversion and repeats.
+function outFrames() {
+  const [a, b] = outRange(), fps = S.proj.fps, of = outFps();
+  const dur = (b - a + 1) / fps, n = Math.max(1, Math.round(dur * of));
+  const one = Array.from({ length: n }, (_, i) => a + Math.min(b - a, Math.floor((i * fps) / of + 1e-6)));
+  const rep = X().fmt === 'video' ? clamp(+X().repeat || 1, 1, 50) : 1;
+  return [].concat(...Array.from({ length: rep }, () => one));
+}
+function bgColor() {
+  const f = FORMATS[X().fmt], mode = (f.bg || []).includes(X().bg) ? X().bg : 'project';
+  if (mode === 'transparent' && !(X().fmt === 'still' || X().fmt === 'seq') ) return null;
+  if (mode === 'transparent') return X().img === 'jpeg' ? S.proj.bg : null;
+  return mode === 'custom' ? X().bgColor : S.proj.bg;
+}
+function makeRenderer(w, h, fit, bg) {
+  const p = S.proj, c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  let sx = w / p.w, sy = h / p.h;
+  if (fit === 'fit') sx = sy = Math.min(sx, sy); else if (fit === 'fill') sx = sy = Math.max(sx, sy);
+  const ox = (w - p.w * sx) / 2, oy = (h - p.h * sy) / 2;
+  return {
+    canvas: c, ctx: x,
+    draw(f) {
+      x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1;
+      x.clearRect(0, 0, w, h);
+      if (bg) { x.fillStyle = bg; x.fillRect(0, 0, w, h); }
+      x.setTransform(sx, 0, 0, sy, ox, oy);
+      x.save(); x.beginPath(); x.rect(0, 0, p.w, p.h); x.clip();
+      drawFrame(x, f, false);
+      x.restore();
+    },
+  };
+}
 
-function frameSVG(f, withBg = true) {
+function frameSVG(f, bg) {
   const p = S.proj;
-  let s = withBg ? `<rect width="${p.w}" height="${p.h}" fill="${p.bg}"/>` : '';
+  let s = bg ? `<rect width="${p.w}" height="${p.h}" fill="${bg}"/>` : '';
   for (const L of p.layers) if (L.visible) for (const el of contentAt(L, f)) s += elSVG(el);
   return s;
 }
-function svgDoc(inner) {
+function svgDoc(inner, w, h) {
   const p = S.proj;
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${p.w}" height="${p.h}" viewBox="0 0 ${p.w} ${p.h}">${inner}</svg>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${p.w} ${p.h}">${inner}</svg>`;
 }
-function animatedSVG() {
-  const p = S.proj, n = p.frameCount, dur = n / p.fps;
-  let s = `<rect width="${p.w}" height="${p.h}" fill="${p.bg}"/>`;
-  for (let f = 0; f < n; f++) {
-    const vals = Array.from({ length: n }, (_, i) => (i === f ? 'inline' : 'none')).join(';');
-    const times = Array.from({ length: n }, (_, i) => (i / n).toFixed(5)).join(';');
-    s += `<g display="${f === 0 ? 'inline' : 'none'}"><animate attributeName="display" values="${vals}" keyTimes="${times}" dur="${dur}s" calcMode="discrete" repeatCount="indefinite"/>${frameSVG(f, false)}</g>`;
+function animatedSVG(w, h, bg) {
+  const [a, b] = outRange(), n = b - a + 1, dur = n / S.proj.fps;
+  let s = bg ? `<rect width="${S.proj.w}" height="${S.proj.h}" fill="${bg}"/>` : '';
+  for (let i = 0; i < n; i++) {
+    const vals = Array.from({ length: n }, (_, k) => (k === i ? 'inline' : 'none')).join(';');
+    const times = Array.from({ length: n }, (_, k) => (k / n).toFixed(5)).join(';');
+    s += `<g display="${i === 0 ? 'inline' : 'none'}"><animate attributeName="display" values="${vals}" keyTimes="${times}" dur="${dur}s" calcMode="discrete" repeatCount="indefinite"/>${frameSVG(a + i, null)}</g>`;
   }
-  return svgDoc(s);
+  return svgDoc(s, w, h);
 }
 function pickVideoType() {
   if (!window.MediaRecorder) return null;
@@ -1082,126 +1180,130 @@ function pickVideoType() {
   }
   return null;
 }
-async function encodeMP4(scale, onProgress) {
-  if (!window.VideoEncoder || !window.VideoFrame) return null;
-  const p = S.proj;
-  const width = Math.max(2, Math.round((p.w * scale) / 2) * 2), height = Math.max(2, Math.round((p.h * scale) / 2) * 2);
-  let codec = null;
-  for (const c of ['avc1.640033', 'avc1.640028', 'avc1.4d0033', 'avc1.4d0028', 'avc1.42e01f']) {
+const CODECS = {
+  avc: ['avc1.640034', 'avc1.640033', 'avc1.640028', 'avc1.4d0033', 'avc1.4d0028', 'avc1.42e01f'],
+  hevc: ['hvc1.1.6.L153.B0', 'hvc1.1.6.L123.B0', 'hev1.1.6.L153.B0', 'hev1.1.6.L123.B0'],
+};
+async function findCodec(kind, width, height, bitrate, framerate) {
+  if (!window.VideoEncoder) return null;
+  for (const c of CODECS[kind]) {
     try {
-      const r = await VideoEncoder.isConfigSupported({ codec: c, width, height, bitrate: 6_000_000, framerate: p.fps });
-      if (r.supported) { codec = c; break; }
+      const cfg = { codec: c, width, height, bitrate, framerate };
+      if (kind === 'avc') cfg.avc = { format: 'avc' };
+      if (kind === 'hevc') cfg.hevc = { format: 'hevc' };
+      if ((await VideoEncoder.isConfigSupported(cfg)).supported) return cfg;
     } catch {}
   }
-  if (!codec) return null;
+  return null;
+}
+const videoBitrate = (w, h, fps) => Math.round(clamp(w * h * fps * QUALITY[X().quality || 'high'] * (X().codec === 'hevc' ? 0.6 : 1), 300_000, 80_000_000));
+
+async function encodeVideo(r, frames, w, h, fps, onProgress) {
+  const bitrate = videoBitrate(w, h, fps);
+  const cfg = await findCodec(X().codec, w, h, bitrate, fps) || (X().codec === 'hevc' ? await findCodec('avc', w, h, bitrate, fps) : null);
+  if (!cfg) return null;
   const { Muxer, ArrayBufferTarget } = await import('./vendor/mp4-muxer.mjs');
-  const muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: 'avc', width, height, frameRate: p.fps }, fastStart: 'in-memory' });
+  const muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: cfg.codec.startsWith('avc') ? 'avc' : 'hevc', width: w, height: h, frameRate: fps }, fastStart: 'in-memory' });
   let failure = null;
   const enc = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: (e) => { failure = e; } });
-  enc.configure({ codec, width, height, bitrate: Math.min(12_000_000, Math.max(1_500_000, width * height * 4)), framerate: p.fps, avc: { format: 'avc' } });
-  const c = document.createElement('canvas');
-  c.width = width; c.height = height;
-  const x = c.getContext('2d');
-  const dur = 1e6 / p.fps;
-  for (let f = 0; f < p.frameCount; f++) {
+  enc.configure(cfg);
+  const dur = 1e6 / fps;
+  for (let i = 0; i < frames.length; i++) {
     if (failure) throw failure;
-    x.setTransform(width / p.w, 0, 0, height / p.h, 0, 0);
-    drawFrame(x, f, true);
-    const frame = new VideoFrame(c, { timestamp: Math.round(f * dur), duration: Math.round(dur) });
-    enc.encode(frame, { keyFrame: f % (p.fps * 2) === 0 });
-    frame.close();
-    while (enc.encodeQueueSize > 6) await new Promise((r) => setTimeout(r, 5));
-    onProgress((f + 1) / p.frameCount);
-    if (f % 3 === 0) await new Promise((r) => setTimeout(r, 0));
+    r.draw(frames[i]);
+    const vf = new VideoFrame(r.canvas, { timestamp: Math.round(i * dur), duration: Math.round(dur) });
+    enc.encode(vf, { keyFrame: i % Math.max(1, Math.round(fps * 2)) === 0 });
+    vf.close();
+    while (enc.encodeQueueSize > 6) await new Promise((res) => setTimeout(res, 5));
+    onProgress((i + 1) / frames.length);
+    if (i % 3 === 0) await tick();
   }
   await enc.flush();
   if (failure) throw failure;
-  muxer.finalize();
-  enc.close();
-  return { blob: new Blob([muxer.target.buffer], { type: 'video/mp4' }), ext: 'mp4' };
+  muxer.finalize(); enc.close();
+  return { blob: new Blob([muxer.target.buffer], { type: 'video/mp4' }), ext: 'mp4', codec: cfg.codec.startsWith('avc') ? 'H.264' : 'H.265' };
 }
-async function recordVideo(scale, onProgress) {
+async function recordVideo(r, frames, fps, onProgress) {
   const type = pickVideoType();
   if (!type) throw new Error('Video export isn’t supported in this browser. Try GIF instead.');
-  const p = S.proj;
-  const c = document.createElement('canvas');
-  c.width = Math.round((p.w * scale) / 2) * 2; c.height = Math.round((p.h * scale) / 2) * 2;
-  const x = c.getContext('2d');
-  const draw = (f) => { x.setTransform(c.width / p.w, 0, 0, c.height / p.h, 0, 0); drawFrame(x, f, true); };
-  draw(0);
-  const stream = c.captureStream(p.fps);
-  const rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 8_000_000 });
+  r.draw(frames[0]);
+  const stream = r.canvas.captureStream(fps);
+  const rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: videoBitrate(r.canvas.width, r.canvas.height, fps) });
   const chunks = [];
   rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
-  const done = new Promise((r) => { rec.onstop = r; });
+  const done = new Promise((res) => { rec.onstop = res; });
   rec.start(250);
-  const t0 = performance.now(), frameMs = 1000 / p.fps;
-  for (let f = 0; f < p.frameCount; f++) {
-    draw(f);
-    onProgress((f + 1) / p.frameCount);
-    const target = t0 + (f + 1) * frameMs;
-    await new Promise((r) => setTimeout(r, Math.max(0, target - performance.now())));
+  const t0 = performance.now(), frameMs = 1000 / fps;
+  for (let i = 0; i < frames.length; i++) {
+    r.draw(frames[i]);
+    onProgress((i + 1) / frames.length);
+    await new Promise((res) => setTimeout(res, Math.max(0, t0 + (i + 1) * frameMs - performance.now())));
   }
-  rec.stop();
-  stream.getTracks().forEach((t) => t.stop());
+  rec.stop(); stream.getTracks().forEach((t) => t.stop());
   await done;
-  return { blob: new Blob(chunks, { type: type.split(';')[0] }), ext: type.includes('mp4') ? 'mp4' : 'webm' };
+  return { blob: new Blob(chunks, { type: type.split(';')[0] }), ext: type.includes('mp4') ? 'mp4' : 'webm', codec: 'recorded' };
 }
 
 async function runExport() {
-  const fmt = document.querySelector('input[name=fmt]:checked').value;
-  const scale = +$('#exScale').value, transparent = $('#exTransparent').checked;
-  const p = S.proj, base = safeName(p.name);
+  readExportForm();
+  const x = X(), p = S.proj, fmt = x.fmt;
+  const name = safeName($('#exName').value || p.name);
+  const [w, h] = outSize(), fps = outFps(), bg = bgColor();
   if (S.playing) stop();
-  $('#exChoose').hidden = true; $('#exWork').hidden = false; $('#exDone').hidden = true;
+  $('#exChoose').hidden = true; $('#exFoot').hidden = true; $('#exWork').hidden = false; $('#exDone').hidden = true;
   const prog = (v, msg) => { $('#exBar').style.width = Math.round(v * 100) + '%'; if (msg) $('#exStatus').textContent = msg; };
   prog(0, 'Working…');
+  await tick();
   try {
-    let blob, name, preview = 'img';
-    if (fmt === 'gif') {
-      const frames = [];
-      for (let f = 0; f < p.frameCount; f++) {
-        const c = renderFrameCanvas(f, scale);
-        frames.push(c.getContext('2d').getImageData(0, 0, c.width, c.height));
-        prog((f + 1) / p.frameCount * 0.3, `Drawing frame ${f + 1} of ${p.frameCount}…`);
-        if (f % 4 === 0) await new Promise((r) => setTimeout(r, 0));
-      }
-      blob = await encodeGIF(frames, p.fps, (v) => prog(0.3 + v * 0.7, 'Making GIF…'));
-      name = base + '.gif';
-    } else if (fmt === 'video') {
+    let blob, file, preview = 'img';
+    if (fmt === 'video') {
+      const frames = outFrames(), r = makeRenderer(w, h, x.fit, bg);
       prog(0, 'Making video…');
-      let r = null;
-      try { r = await encodeMP4(scale, (v) => prog(v)); } catch (e) { console.warn('WebCodecs failed, falling back', e); }
-      if (!r) { prog(0, 'Recording video in real time…'); r = await recordVideo(scale, (v) => prog(v)); }
-      blob = r.blob; name = `${base}.${r.ext}`; preview = 'video';
-    } else if (fmt === 'pngseq') {
-      const files = [];
-      const digits = String(p.frameCount).length;
-      for (let f = 0; f < p.frameCount; f++) {
-        const b = await canvasBlob(renderFrameCanvas(f, scale, transparent));
-        files.push({ name: `${base}_${String(f + 1).padStart(Math.max(4, digits), '0')}.png`, data: new Uint8Array(await b.arrayBuffer()) });
-        prog((f + 1) / p.frameCount, `Frame ${f + 1} of ${p.frameCount}…`);
+      let res = null;
+      try { res = await encodeVideo(r, frames, w, h, fps, (v) => prog(v)); } catch (e) { console.warn('encoder failed, falling back', e); }
+      if (!res) { prog(0, 'Recording video in real time…'); res = await recordVideo(r, frames, fps, (v) => prog(v)); }
+      blob = res.blob; file = `${name}.${res.ext}`; preview = 'video';
+    } else if (fmt === 'gif') {
+      const frames = outFrames(), r = makeRenderer(w, h, x.fit, bg);
+      blob = await encodeGIF({
+        width: w, height: h, count: frames.length, fps, colors: +x.colors, loop: x.loop,
+        getFrame: (i) => { r.draw(frames[i]); return r.ctx.getImageData(0, 0, w, h); },
+        onProgress: (v) => prog(v, `Making GIF… ${Math.round(v * 100)}%`),
+      });
+      file = name + '.gif';
+    } else if (fmt === 'seq') {
+      const frames = outFrames(), r = makeRenderer(w, h, x.fit, bg);
+      const type = x.img === 'jpeg' ? 'image/jpeg' : 'image/png', ext = x.img === 'jpeg' ? 'jpg' : 'png';
+      const digits = Math.max(4, String(frames.length).length), files = [];
+      for (let i = 0; i < frames.length; i++) {
+        r.draw(frames[i]);
+        const b = await canvasBlob(r.canvas, type, x.jpgQ / 100);
+        files.push({ name: `${name}_${String(i + 1).padStart(digits, '0')}.${ext}`, data: new Uint8Array(await b.arrayBuffer()) });
+        prog((i + 1) / frames.length, `Frame ${i + 1} of ${frames.length}…`);
       }
-      blob = makeZip(files); name = base + '-frames.zip'; preview = null;
-    } else if (fmt === 'png') {
-      blob = await canvasBlob(renderFrameCanvas(S.cur, scale, transparent));
-      name = `${base}-frame${S.cur + 1}.png`;
+      blob = makeZip(files); file = `${name}-frames.zip`; preview = null;
+    } else if (fmt === 'still') {
+      const r = makeRenderer(w, h, x.fit, bg);
+      r.draw(S.cur);
+      const jpg = x.img === 'jpeg';
+      blob = await canvasBlob(r.canvas, jpg ? 'image/jpeg' : 'image/png', x.jpgQ / 100);
+      file = `${name}-frame${S.cur + 1}.${jpg ? 'jpg' : 'png'}`;
     } else if (fmt === 'svg') {
-      blob = new Blob([svgDoc(frameSVG(S.cur))], { type: 'image/svg+xml' });
-      name = `${base}-frame${S.cur + 1}.svg`;
+      blob = new Blob([svgDoc(frameSVG(S.cur, bg), w, h)], { type: 'image/svg+xml' });
+      file = `${name}-frame${S.cur + 1}.svg`;
     } else if (fmt === 'svganim') {
-      blob = new Blob([animatedSVG()], { type: 'image/svg+xml' });
-      name = base + '.svg';
-    } else if (fmt === 'project') {
+      blob = new Blob([animatedSVG(w, h, bg)], { type: 'image/svg+xml' });
+      file = name + '.svg';
+    } else {
       blob = new Blob([JSON.stringify(p)], { type: 'application/json' });
-      name = base + '.inkframe'; preview = null;
+      file = name + '.inkframe'; preview = null;
     }
     prog(1);
-    showExportResult(blob, name, preview);
+    showExportResult(blob, file, preview);
   } catch (err) {
     console.error(err);
     toast(err.message || 'Export failed');
-    $('#exChoose').hidden = false; $('#exWork').hidden = true;
+    $('#exChoose').hidden = false; $('#exFoot').hidden = false; $('#exWork').hidden = true;
   }
 }
 function showExportResult(blob, name, preview) {
@@ -1211,7 +1313,8 @@ function showExportResult(blob, name, preview) {
   $('#exWork').hidden = true; $('#exDone').hidden = false;
   $('#exPreview').innerHTML = preview === 'img' ? `<img src="${url}" alt="">` : preview === 'video' ? `<video src="${url}" autoplay loop muted playsinline controls></video>` : '';
   $('#exPreview').hidden = !preview;
-  $('#exInfo').textContent = `${name} · ${(blob.size / 1024 / 1024).toFixed(blob.size > 1e6 ? 1 : 2)} MB`;
+  const mb = blob.size / 1024 / 1024;
+  $('#exInfo').textContent = `${name} · ${mb >= 1 ? mb.toFixed(1) + ' MB' : Math.max(1, Math.round(blob.size / 1024)) + ' KB'}`;
   const a = $('#exDownload'); a.href = url; a.download = name;
   $('#exShare').hidden = !canShareFiles(blob, name);
 }
@@ -1228,14 +1331,129 @@ async function shareBlob(blob, name) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 30000);
 }
-$('#exShare').onclick = () => exportResult && shareBlob(exportResult.blob, exportResult.name);
-$('#exBack').onclick = () => { $('#exChoose').hidden = false; $('#exDone').hidden = true; };
-$('#exGo').onclick = runExport;
+
+/* export dialog form */
+function buildExportForm() {
+  $('#exFormats').innerHTML = Object.entries(FORMATS).map(([k, f]) => `<button data-fmt="${k}"><b>${f.label}</b><span>${f.sub}</span></button>`).join('');
+  $('#exPreset').innerHTML = PRESETS.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+  $('#exFormats').addEventListener('click', (e) => { const b = e.target.closest('[data-fmt]'); if (b) { X().fmt = b.dataset.fmt; syncExportForm(); } });
+  $('#exChoose').addEventListener('click', (e) => {
+    const b = e.target.closest('.seg [data-v]'); if (!b) return;
+    const key = b.parentElement.dataset.key; X()[key] = b.dataset.v; syncExportForm();
+  });
+  $('#exChoose').addEventListener('input', (e) => {
+    const id = e.target.id;
+    if (id === 'exW' || id === 'exH') {
+      const p = S.proj, [cw, ch] = outSize();
+      let w = +$('#exW').value || cw, h = +$('#exH').value || ch;
+      if (X().link) { if (id === 'exW') h = Math.round((w * p.h) / p.w); else w = Math.round((h * p.w) / p.h); }
+      X().preset = 'custom'; X().w = w; X().h = h;
+      if (id === 'exW') $('#exH').value = h; else $('#exW').value = w;
+      $('#exPreset').value = 'custom';
+      syncSummary(); savePrefs();
+      return;
+    }
+    readExportForm(); syncExportForm(false);
+  });
+  $('#exLink').onclick = () => { X().link = !X().link; syncExportForm(); };
+}
+function readExportForm() {
+  const x = X();
+  x.preset = $('#exPreset').value;
+  if (x.preset === 'custom') { x.w = +$('#exW').value || x.w; x.h = +$('#exH').value || x.h; }
+  x.fit = $('#exFit').value; x.fps = +$('#exFps').value; x.repeat = +$('#exRepeat').value;
+  x.from = +$('#exFrom').value; x.to = +$('#exTo').value;
+  x.codec = $('#exCodec').value; x.quality = $('#exQuality').value;
+  x.colors = +$('#exColors').value; x.loop = $('#exLoop').value;
+  x.img = $('#exImg').value; x.jpgQ = +$('#exJpgQ').value; x.bgColor = $('#exBgColor').value;
+  savePrefs();
+}
+function syncExportForm(fillInputs = true) {
+  const x = X(), f = FORMATS[x.fmt], p = S.proj;
+  document.querySelectorAll('#exFormats [data-fmt]').forEach((b) => b.classList.toggle('on', b.dataset.fmt === x.fmt));
+  document.querySelectorAll('#exChoose [data-show]').forEach((el) => {
+    el.hidden = !el.dataset.show.split(' ').some((k) => {
+      if (k === 'bg') return !!f.bg;
+      if (k === 'fitrow') return f.size && x.fmt !== 'svg' && x.fmt !== 'svganim';
+      if (k === 'jpgq') return f.img && x.img === 'jpeg';
+      if (k === 'none') return x.fmt === 'project';
+      return !!f[k];
+    });
+  });
+  if (fillInputs) {
+    $('#exPreset').value = x.preset;
+    const [w, h] = outSize(); $('#exW').value = w; $('#exH').value = h;
+    $('#exFit').value = x.fit;
+    $('#exFps').innerHTML = `<option value="0">Same as project (${p.fps})</option>` + [6, 8, 10, 12, 15, 24, 25, 30, 50, 60].map((v) => `<option value="${v}">${v} fps</option>`).join('');
+    $('#exFps').value = String(x.fps || 0);
+    $('#exRepeat').value = String(x.repeat || 1);
+    $('#exFrom').value = x.from || 1; $('#exTo').value = x.to || p.frameCount;
+    $('#exFrom').max = $('#exTo').max = p.frameCount;
+    $('#exCodec').value = x.codec; $('#exQuality').value = x.quality;
+    $('#exColors').value = String(x.colors); $('#exLoop').value = String(x.loop);
+    $('#exImg').value = x.img; $('#exJpgQ').value = x.jpgQ; $('#exBgColor').value = x.bgColor;
+  } else if (x.preset !== 'custom') {
+    const [w, h] = outSize(); $('#exW').value = w; $('#exH').value = h;
+  }
+  $('#exJpgQv').textContent = x.jpgQ + '%';
+  $('#exLink').classList.toggle('on', !!x.link);
+  document.querySelectorAll('#exChoose .seg[data-key]').forEach((s) => s.querySelectorAll('[data-v]').forEach((b) => b.classList.toggle('on', b.dataset.v === x[s.dataset.key])));
+  const bgs = f.bg || [];
+  document.querySelectorAll('#exBgSeg [data-v]').forEach((b) => { b.hidden = !bgs.includes(b.dataset.v); });
+  if (!bgs.includes(x.bg)) { x.bg = 'project'; document.querySelectorAll('#exBgSeg [data-v]').forEach((b) => b.classList.toggle('on', b.dataset.v === 'project')); }
+  $('#exBgColor').hidden = x.bg !== 'custom';
+  $('#exRangeCustom').hidden = x.range !== 'custom';
+  const [w, h] = outSize();
+  $('#exFitRow').hidden = $('#exFitRow').hidden || Math.abs(w / h - p.w / p.h) < 0.01;
+  if (!$('#exName').value) $('#exName').value = p.name;
+  syncSummary();
+  savePrefs();
+}
+function syncSummary() {
+  const x = X(), f = FORMATS[x.fmt], p = S.proj;
+  const [w, h] = outSize(), fps = outFps();
+  const parts = [];
+  if (x.fmt === 'project') parts.push(`${p.layers.length} layer${p.layers.length > 1 ? 's' : ''}`, `${p.frameCount} frames`);
+  else if (f.fps || x.fmt === 'svganim') {
+    const n = outFrames().length, [a, b] = outRange();
+    const dur = x.fmt === 'svganim' ? (b - a + 1) / p.fps : n / fps;
+    parts.push(`${w} × ${h}`, `${x.fmt === 'svganim' ? p.fps : fps} fps`, `${x.fmt === 'svganim' ? b - a + 1 : n} frames`, `${dur.toFixed(dur < 10 ? 1 : 0)} s`);
+    if (x.fmt === 'video') parts.push(`about ${((videoBitrate(w, h, fps) * dur) / 8 / 1024 / 1024).toFixed(1)} MB or less`);
+  } else parts.push(`${w} × ${h}`, `frame ${S.cur + 1}`);
+  $('#exSummary').textContent = parts.join(' · ');
+}
+async function checkHevc() {
+  const opt = $('#exCodec').querySelector('[value=hevc]');
+  const ok = !!(await findCodec('hevc', 1280, 720, 4_000_000, 30));
+  opt.disabled = !ok;
+  opt.textContent = ok ? 'H.265 / HEVC (smaller files)' : 'H.265 / HEVC (not available here)';
+  if (!ok && X().codec === 'hevc') { X().codec = 'avc'; $('#exCodec').value = 'avc'; }
+}
 function openExport() {
-  $('#exChoose').hidden = false; $('#exWork').hidden = true; $('#exDone').hidden = true;
-  const vt = pickVideoType();
-  $('#vidDesc').textContent = window.VideoEncoder ? 'MP4 video, ready for any app or social site' : vt ? `${vt.includes('mp4') ? 'MP4' : 'WebM'} video. Records in real time, so it takes as long as the animation.` : 'Not supported in this browser';
+  prefs.exp = { ...EX_DEFAULT, ...(prefs.exp || {}) };
+  $('#exName').value = S.proj.name;
+  $('#exChoose').hidden = false; $('#exFoot').hidden = false; $('#exWork').hidden = true; $('#exDone').hidden = true;
+  syncExportForm();
   $('#dlgExport').showModal();
+  checkHevc();
+}
+$('#exShare').onclick = () => exportResult && shareBlob(exportResult.blob, exportResult.name);
+$('#exBack').onclick = () => { $('#exChoose').hidden = false; $('#exFoot').hidden = false; $('#exDone').hidden = true; };
+$('#exGo').onclick = runExport;
+buildExportForm();
+
+function openOnionPop() {
+  const pop = $('#onionPop'), r = $('#tOnionMenu').getBoundingClientRect();
+  pop.hidden = false; syncOnionPop();
+  const w = pop.offsetWidth, h = pop.offsetHeight;
+  pop.style.left = clamp(r.right - w, 8, innerWidth - w - 8) + 'px';
+  pop.style.top = Math.max(8, r.top - h - 8) + 'px';
+}
+function syncOnionPop() {
+  document.querySelectorAll('#onionPop [data-ol]').forEach((b) => b.classList.toggle('on', b.dataset.ol === prefs.onionLayers));
+  document.querySelectorAll('#onionPop [data-of]').forEach((b) => b.classList.toggle('on', (b.dataset.of === '1') === !!prefs.onionFront));
+  $('#onPrevN').textContent = prefs.onionPrev; $('#onNextN').textContent = prefs.onionNext;
+  $('#onionOpacity').value = prefs.onionOpacity ?? 35;
 }
 
 /* ------------------------------------------------------------ keyboard */
@@ -1287,7 +1505,18 @@ function wire() {
     const L = activeLayer(), k = keyAt(L, S.cur); if (k < 0) return;
     pushUndo(); L.keys[k].ease = e.target.value; changed(true);
   };
-  $('#tOnion').onclick = () => { prefs.onion = !prefs.onion; savePrefs(); updatePanel(); requestRender(); };
+  $('#tOnion').onclick = () => { prefs.onion = !prefs.onion; savePrefs(); updatePanel(); renderTimeline(); requestRender(); };
+  $('#tOnionMenu').onclick = (e) => { e.stopPropagation(); const pop = $('#onionPop'); if (pop.hidden) openOnionPop(); else pop.hidden = true; };
+  document.addEventListener('pointerdown', (e) => { const pop = $('#onionPop'); if (!pop.hidden && !e.target.closest('#onionPop, #tOnionMenu')) pop.hidden = true; });
+  $('#onionPop').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-ol],[data-of],[data-os]'); if (!b) return;
+    if (b.dataset.ol) prefs.onionLayers = b.dataset.ol;
+    if (b.dataset.of) prefs.onionFront = b.dataset.of === '1';
+    if (b.dataset.os) { const [key, d] = b.dataset.os.split(':'); prefs[key] = clamp(prefs[key] + +d, 0, 6); }
+    prefs.onion = true;
+    savePrefs(); syncOnionPop(); updatePanel(); renderTimeline(); requestRender();
+  });
+  $('#onionOpacity').addEventListener('input', (e) => { prefs.onionOpacity = +e.target.value; savePrefs(); requestRender(); });
   $('#tLoop').onclick = () => { prefs.loop = !prefs.loop; savePrefs(); updatePanel(); requestRender(); };
   $('#fps').addEventListener('change', (e) => { S.proj.fps = clamp(Math.round(+e.target.value || 12), 1, 60); changed(false); });
   new ResizeObserver(() => { resize(); }).observe(wrap);
@@ -1316,6 +1545,16 @@ async function init() {
   updateUndoButtons();
   if (!prefs.helpSeen) { prefs.helpSeen = true; savePrefs(); $('#dlgHelp').showModal(); }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js').then((r) => r.update()).catch(() => {});
+    // When a new version installs, save and reload once so the update shows straight away.
+    navigator.serviceWorker.addEventListener('controllerchange', async () => {
+      if (!hadController || window.__reloading) return;
+      window.__reloading = true;
+      await saveNow();
+      location.reload();
+    });
+  }
 }
 init();
