@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Inkframe</title>
+<meta name="description" content="Draw and animate on iPad: vector brushes, timeline, layers, onion skin, tweens and GIF/video export.">
+<meta name="theme-color" content="#16161a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Inkframe">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <button class="tb" id="btnProjects" title="Projects"><span data-icon="folder"></span><span class="lbl">Projects</span></button>
+    <button class="title" id="projName" title="Rename">Untitled</button>
+    <div class="spacer"></div>
+    <button class="tb icon" id="btnUndo" title="Undo (two-finger tap)"><span data-icon="undo"></span></button>
+    <button class="tb icon" id="btnRedo" title="Redo (three-finger tap)"><span data-icon="redo"></span></button>
+    <span class="sep"></span>
+    <button class="tb icon" id="btnFit" title="Fit canvas to screen"><span data-icon="fit"></span></button>
+    <button class="tb icon" id="btnHelp" title="Help"><span data-icon="help"></span></button>
+    <button class="tb icon" id="btnSettings" title="Settings"><span data-icon="gear"></span></button>
+    <button class="tb primary" id="btnExport"><span data-icon="share"></span><span class="lbl">Export</span></button>
+  </header>
+
+  <div id="main">
+    <nav id="tools"></nav>
+    <div id="stageWrap">
+      <canvas id="cv"></canvas>
+      <canvas id="overlay"></canvas>
+      <div id="zoomInfo"></div>
+    </div>
+    <aside id="panel">
+      <section class="psec" id="secColor">
+        <h3>Colour</h3>
+        <div class="colorRow">
+          <label class="bigSwatch" id="curColor"><input type="color" id="colorInput" value="#1d1d24"></label>
+          <div id="recent"></div>
+        </div>
+        <div id="palette"></div>
+      </section>
+      <section class="psec" id="secSize">
+        <h3>Size <span id="sizeVal"></span></h3>
+        <input type="range" id="size" min="1" max="120" step="1">
+      </section>
+      <section class="psec" id="secOpacity">
+        <h3>Opacity <span id="opVal"></span></h3>
+        <input type="range" id="opacity" min="5" max="100" step="1">
+      </section>
+      <section class="psec" id="secSmooth">
+        <h3>Smoothing <span id="smVal"></span></h3>
+        <input type="range" id="smoothing" min="0" max="90" step="1">
+      </section>
+      <section class="psec" id="secPressure">
+        <label class="toggle"><input type="checkbox" id="pressure"><span>Pencil pressure</span></label>
+      </section>
+      <section class="psec" id="secShapeFill">
+        <label class="toggle"><input type="checkbox" id="shapeFill"><span>Fill inside</span></label>
+      </section>
+      <section class="psec" id="secEraser">
+        <h3>Eraser</h3>
+        <div class="seg" id="eraserMode">
+          <button data-v="partial">Partial</button><button data-v="whole">Whole strokes</button>
+        </div>
+      </section>
+      <section class="psec" id="secSel">
+        <h3>Selection <span id="selCount"></span></h3>
+        <div class="grid2">
+          <button id="selDelete">Delete</button>
+          <button id="selDup">Duplicate</button>
+          <button id="selCopy">Copy</button>
+          <button id="selPaste">Paste</button>
+          <button id="selFlipH">Flip ↔</button>
+          <button id="selFlipV">Flip ↕</button>
+          <button id="selFront">To front</button>
+          <button id="selBack">To back</button>
+          <button id="selAll">Select all</button>
+          <button id="selColor">Apply colour</button>
+        </div>
+        <p class="hint">Drag to move. Use the round handle to rotate and the square one to resize.</p>
+      </section>
+      <section class="psec" id="secFillHint">
+        <p class="hint">Tap inside a closed shape or loop to fill it with the current colour.</p>
+      </section>
+      <section class="psec" id="secHandHint">
+        <p class="hint">Drag to move around. Pinch with two fingers to zoom.</p>
+      </section>
+    </aside>
+  </div>
+
+  <section id="timeline">
+    <div id="tlControls">
+      <div class="grp">
+        <button class="ic" id="tFirst" title="First frame"><span data-icon="first"></span></button>
+        <button class="ic" id="tPrev" title="Previous frame"><span data-icon="prev"></span></button>
+        <button class="ic play" id="tPlay" title="Play / pause"><span data-icon="play"></span></button>
+        <button class="ic" id="tNext" title="Next frame"><span data-icon="next"></span></button>
+        <button class="ic" id="tLast" title="Last frame"><span data-icon="last"></span></button>
+        <span id="frameInfo">1 / 24</span>
+      </div>
+      <div class="grp">
+        <button class="op" id="tKey" title="Turn this frame into a keyframe, copying the drawing"><span data-icon="key"></span><span>Keyframe</span></button>
+        <button class="op" id="tBlank" title="Turn this frame into an empty keyframe"><span data-icon="keyblank"></span><span>Blank</span></button>
+        <button class="op" id="tNew" title="Go to the next frame and start a blank keyframe there"><span data-icon="plusframe"></span><span>Next blank</span></button>
+        <button class="op" id="tInsert" title="Insert a frame (makes the drawing last longer)"><span data-icon="insert"></span><span>Hold +1</span></button>
+        <button class="op" id="tDelete" title="Remove a frame from this layer"><span data-icon="remove"></span><span>Hold −1</span></button>
+        <button class="op" id="tTween" title="Tween: smoothly move/morph to the next keyframe"><span data-icon="tween"></span><span>Tween</span></button>
+        <select id="tEase" title="Tween easing">
+          <option value="linear">Linear</option><option value="in">Ease in</option><option value="out">Ease out</option><option value="inout">Ease in-out</option>
+        </select>
+      </div>
+      <div class="grp">
+        <button class="op" id="tOnion" title="Onion skin: see neighbouring frames"><span data-icon="onion"></span><span>Onion</span></button>
+        <button class="op" id="tLoop" title="Loop playback"><span data-icon="loop"></span><span>Loop</span></button>
+        <label class="fps">FPS <input type="number" id="fps" min="1" max="60" inputmode="numeric"></label>
+      </div>
+    </div>
+    <div id="tlScroll"><div id="tlGrid"></div></div>
+  </section>
+</div>
+
+<div id="toast"></div>
+
+<dialog id="dlgProjects">
+  <div class="dlgHead"><h2>Your animations</h2><button class="x" data-close>✕</button></div>
+  <div class="dlgBar">
+    <button class="primary" id="pNew">+ New animation</button>
+    <label class="btn">Open file…<input type="file" id="pImport" hidden></label>
+  </div>
+  <div id="pList"></div>
+  <p class="hint">Animations are saved on this iPad automatically. Use “Save file” now and then to keep a backup in Files or iCloud Drive.</p>
+</dialog>
+
+<dialog id="dlgSettings">
+  <div class="dlgHead"><h2>Settings</h2><button class="x" data-close>✕</button></div>
+  <h4>This animation</h4>
+  <div class="form">
+    <label>Name <input id="sName" type="text"></label>
+    <label>Canvas size
+      <select id="sPreset">
+        <option value="1920x1080">Landscape HD 1920 × 1080</option>
+        <option value="1280x720">Landscape 1280 × 720</option>
+        <option value="1080x1080">Square 1080 × 1080</option>
+        <option value="1080x1920">Portrait 1080 × 1920</option>
+        <option value="1080x1350">Portrait 4:5 1080 × 1350</option>
+        <option value="custom">Custom…</option>
+      </select>
+    </label>
+    <div class="row2" id="sCustom"><label>Width <input id="sW" type="number" min="16" max="4096"></label><label>Height <input id="sH" type="number" min="16" max="4096"></label></div>
+    <label>Frames per second <input id="sFps" type="number" min="1" max="60"></label>
+    <label>Length (frames) <input id="sLen" type="number" min="1" max="2000"></label>
+    <label>Background colour <input id="sBg" type="color"></label>
+  </div>
+  <h4>App</h4>
+  <div class="form">
+    <label>Finger on canvas
+      <select id="sFinger">
+        <option value="auto">Draw, until Apple Pencil is used</option>
+        <option value="draw">Always draws</option>
+        <option value="pan">Only moves / zooms</option>
+      </select>
+    </label>
+    <label class="toggle"><input type="checkbox" id="sAutoKey"><span>Drawing on a held frame makes a new keyframe</span></label>
+    <div class="row2"><label>Onion: frames before <input id="sOnPrev" type="number" min="0" max="5"></label><label>frames after <input id="sOnNext" type="number" min="0" max="5"></label></div>
+  </div>
+  <div class="dlgFoot"><button class="primary" id="sApply">Done</button></div>
+</dialog>
+
+<dialog id="dlgExport">
+  <div class="dlgHead"><h2>Export</h2><button class="x" data-close>✕</button></div>
+  <div id="exChoose">
+    <div class="choices">
+      <label><input type="radio" name="fmt" value="gif" checked><b>GIF</b><span>Looping animation, great for sharing</span></label>
+      <label><input type="radio" name="fmt" value="video"><b>Video</b><span id="vidDesc">MP4 video, plays back in real time while exporting</span></label>
+      <label><input type="radio" name="fmt" value="pngseq"><b>PNG sequence</b><span>Every frame as an image, in a .zip</span></label>
+      <label><input type="radio" name="fmt" value="png"><b>PNG image</b><span>Just the current frame</span></label>
+      <label><input type="radio" name="fmt" value="svganim"><b>Animated SVG</b><span>Vector animation for the web</span></label>
+      <label><input type="radio" name="fmt" value="svg"><b>SVG image</b><span>Current frame as editable vectors</span></label>
+      <label><input type="radio" name="fmt" value="project"><b>Project file</b><span>Backup you can open again later (.inkframe)</span></label>
+    </div>
+    <div class="form inline">
+      <label>Size <select id="exScale"><option value="0.25">25%</option><option value="0.5">50%</option><option value="1" selected>100%</option><option value="2">200%</option></select></label>
+      <label class="toggle"><input type="checkbox" id="exTransparent"><span>Transparent background (PNG)</span></label>
+    </div>
+    <div class="dlgFoot"><button class="primary" id="exGo">Export</button></div>
+  </div>
+  <div id="exWork" hidden>
+    <p id="exStatus">Working…</p>
+    <div class="bar"><div id="exBar"></div></div>
+  </div>
+  <div id="exDone" hidden>
+    <div id="exPreview"></div>
+    <p class="hint" id="exInfo"></p>
+    <div class="dlgFoot">
+      <button id="exBack">Back</button>
+      <a class="btn" id="exDownload" download>Download</a>
+      <button class="primary" id="exShare">Save / Share…</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="dlgHelp">
+  <div class="dlgHead"><h2>Quick guide</h2><button class="x" data-close>✕</button></div>
+  <div class="help">
+    <p><b>Draw</b> with Apple Pencil. Once the Pencil is used, your fingers only move and zoom, so your palm won't leave marks.</p>
+    <p><b>Gestures:</b> pinch to zoom, drag with two fingers to move, <b>two-finger tap to undo</b>, three-finger tap to redo.</p>
+    <p><b>Frame by frame:</b> draw, then tap <b>Next blank</b> to move on and draw the next drawing. Onion skin shows the previous frame in red and the next one in green.</p>
+    <p><b>Hold a drawing longer:</b> tap <b>Hold +1</b> to add a frame after the current one.</p>
+    <p><b>Tweens:</b> draw on frame 1. Tap a later frame and tap <b>Keyframe</b>. Move, resize or reshape the drawing there with the Select tool. Go back to frame 1 and tap <b>Tween</b>. The frames in between are filled in automatically.</p>
+    <p><b>Layers:</b> use the buttons at the top-left of the timeline. Tap a layer's name to choose it, double-tap to rename. The eye hides it and the lock protects it.</p>
+    <p><b>Saving:</b> everything saves automatically on this iPad. Use Export → Project file for a backup.</p>
+    <p class="hint">Keyboard: B brush, N pen, E eraser, V select, L line, R rectangle, O ellipse, K fill, H hand, Space play, , and . step frames, ⌘Z undo.</p>
+  </div>
+</dialog>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
