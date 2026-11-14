@@ -24,6 +24,9 @@
     <button class="tb icon" id="btnUndo" title="Undo (two-finger tap)"><span data-icon="undo"></span></button>
     <button class="tb icon" id="btnRedo" title="Redo (three-finger tap)"><span data-icon="redo"></span></button>
     <span class="sep"></span>
+    <button class="tb" id="btnImage" title="Import a PNG, photo or other image onto the current layer"><span data-icon="image"></span><span class="lbl">Image</span></button>
+    <input type="file" id="imgInput" accept="image/*" hidden>
+    <span class="sep"></span>
     <button class="tb icon" id="btnFit" title="Fit canvas to screen"><span data-icon="fit"></span></button>
     <button class="tb icon" id="btnHelp" title="Help"><span data-icon="help"></span></button>
     <button class="tb icon" id="btnSettings" title="Settings"><span data-icon="gear"></span></button>
@@ -275,6 +278,7 @@
     <p><b>Hold a drawing longer:</b> tap <b>Hold +1</b> to add a frame after the current one.</p>
     <p><b>Tweens:</b> draw on frame 1. Tap a later frame and tap <b>Keyframe</b>. Move, resize or reshape the drawing there with the Select tool. Go back to frame 1 and tap <b>Tween</b>. The frames in between are filled in automatically.</p>
     <p><b>Layers:</b> use the buttons at the top-left of the timeline. Tap a layer's name to choose it, double-tap to rename. The eye hides it and the lock protects it.</p>
+    <p><b>Images:</b> tap <b>Image</b> at the top to add a PNG or photo to the current layer and frame. You can also paste or drag one in. Move, resize and rotate it with the Select tool, and tween it like a drawing.</p>
     <p><b>Saving:</b> everything saves automatically on this iPad. Use Export → Project file for a backup.</p>
     <p class="hint">Keyboard: B brush, N pen, E eraser, V select, L line, R rectangle, O ellipse, K fill, H hand, Space play, , and . step frames, ⌘Z undo.</p>
   </div>

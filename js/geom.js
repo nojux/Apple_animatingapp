@@ -133,7 +133,32 @@ function path2d(el, kind) {
   return c[key];
 }
 
+// Images: { t:'i', src:assetId, iw, ih, pts:[topLeft, topRight, bottomLeft], a, w:0 }
+let imageSource = () => null;
+export function setImageSource(fn) { imageSource = fn; }
+export function imgCorners(el) {
+  const [tl, tr, bl] = el.pts;
+  return [tl, tr, [tr[0] + bl[0] - tl[0], tr[1] + bl[1] - tl[1]], bl];
+}
+function imgMatrix(el) {
+  const [tl, tr, bl] = el.pts;
+  return [(tr[0] - tl[0]) / el.iw, (tr[1] - tl[1]) / el.iw, (bl[0] - tl[0]) / el.ih, (bl[1] - tl[1]) / el.ih, tl[0], tl[1]];
+}
+const r4 = (v) => Math.round(v * 10000) / 10000;
+
 export function drawEl(ctx, el, alphaMul = 1) {
+  if (el.t === 'i') {
+    const img = imageSource(el.src);
+    const a = (el.a ?? 1) * alphaMul;
+    if (!img || a <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.transform(...imgMatrix(el));
+    ctx.drawImage(img, 0, 0, el.iw, el.ih);
+    ctx.restore();
+    return;
+  }
   const a = (el.a ?? 1) * alphaMul;
   if (a <= 0) return;
   ctx.globalAlpha = a;
@@ -148,6 +173,10 @@ export function drawEl(ctx, el, alphaMul = 1) {
 
 export function elSVG(el, alphaMul = 1) {
   const a = (el.a ?? 1) * alphaMul;
+  if (el.t === 'i') {
+    const m = imgMatrix(el).map(r4).join(' ');
+    return `<use href="#img-${el.src}" transform="matrix(${m})"${a < 1 ? ` opacity="${r2(a)}"` : ''}/>`;
+  }
   let s = '';
   const op = a < 1 ? ` opacity="${r2(a)}"` : '';
   if (el.f && el.pts.length > 2) s += `<path d="${fillD(el)}" fill="${el.f}"${op}/>`;
@@ -158,7 +187,7 @@ export function elSVG(el, alphaMul = 1) {
 
 export function bbox(el) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const p of el.pts) {
+  for (const p of (el.t === 'i' ? imgCorners(el) : el.pts)) {
     if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
     if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
   }
@@ -192,6 +221,7 @@ export function pointInPoly(x, y, pts) {
 export function hitEl(el, x, y, tol) {
   const b = bbox(el);
   if (x < b.x0 - tol || x > b.x1 + tol || y < b.y0 - tol || y > b.y1 + tol) return false;
+  if (el.t === 'i') return pointInPoly(x, y, imgCorners(el));
   if (el.f && el.pts.length > 2 && pointInPoly(x, y, el.pts)) return true;
   const pts = el.pts;
   if (pts.length === 1) return Math.hypot(x - pts[0][0], y - pts[0][1]) <= el.w / 2 + tol;
@@ -205,7 +235,7 @@ export function hitEl(el, x, y, tol) {
 }
 // Can the fill tool fill this element at (x,y)?
 export function fillable(el, x, y) {
-  return el.pts.length > 2 && pointInPoly(x, y, el.pts);
+  return el.t !== 'i' && el.pts.length > 2 && pointInPoly(x, y, el.pts);
 }
 
 // Insert points so no gap is larger than `step` (keeps pressure).
@@ -230,6 +260,7 @@ export function densify(pts, closed, step) {
 // Erase the parts of an element within radius r of (x,y). Returns null if untouched,
 // otherwise an array of replacement elements (possibly empty).
 export function eraseEl(el, x, y, r) {
+  if (el.t === 'i') return null; // images are removed with the "Whole strokes" eraser or Delete
   const b = bbox(el);
   if (x < b.x0 - r || x > b.x1 + r || y < b.y0 - r || y > b.y1 + r) return null;
   const step = Math.max(1.5, r / 3);
@@ -283,6 +314,10 @@ export function lerpColor(a, b, t) {
 }
 
 function lerpEl(a, b, t) {
+  if (a.t === 'i' || b.t === 'i') {
+    if (a.t !== b.t || a.src !== b.src) return t < 0.5 ? a : b;
+    return { ...a, pts: a.pts.map((p, i) => [p[0] + (b.pts[i][0] - p[0]) * t, p[1] + (b.pts[i][1] - p[1]) * t]), a: (a.a ?? 1) + ((b.a ?? 1) - (a.a ?? 1)) * t };
+  }
   if (a.t !== b.t || (a.t === 'p' && !!a.cl !== !!b.cl)) return t < 0.5 ? a : b;
   const closed = a.t === 'p' && a.cl;
   const n = Math.min(500, Math.max(a.pts.length, b.pts.length, 2));

@@ -1,6 +1,6 @@
 import { icon, fillIcons } from './icons.js';
 import {
-  drawEl, elSVG, bbox, unionBox, hitEl, fillable, eraseEl, interpolate, EASES, mapPts, cloneEl,
+  drawEl, elSVG, bbox, unionBox, hitEl, fillable, eraseEl, interpolate, EASES, mapPts, cloneEl, setImageSource,
 } from './geom.js';
 import { encodeGIF } from './gif.js';
 import { makeZip } from './zip.js';
@@ -963,7 +963,7 @@ function buildPanel() {
   $('#selFront').onclick = () => order(true);
   $('#selBack').onclick = () => order(false);
   $('#selAll').onclick = () => { S.sel = contentAt(activeLayer(), S.cur).map((_, i) => i); updatePanel(); requestRender(); };
-  $('#selColor').onclick = () => selOp((els) => { S.sel.forEach((i) => { els[i] = { ...els[i], c: prefs.color, f: els[i].f ? prefs.color : null }; }); });
+  $('#selColor').onclick = () => selOp((els) => { S.sel.forEach((i) => { if (els[i].t !== 'i') els[i] = { ...els[i], c: prefs.color, f: els[i].f ? prefs.color : null }; }); });
 }
 
 /* ---------------------------------------------------------- toast/dialogs */
@@ -1029,8 +1029,74 @@ async function loadById(id) {
 }
 async function setProject(p) {
   if (S.playing) stop();
+  pruneAssets(p);
+  loadAssets(p);
   S.proj = p; S.cur = 0; S.layer = Math.max(0, p.layers.length - 1); S.sel = []; S.undo = []; S.redo = [];
   fit(); renderTimeline(); updatePanel(); updateUndoButtons(); requestRender();
+}
+
+/* images */
+const images = new Map();
+setImageSource((id) => { const im = images.get(id); return im && im.complete && im.naturalWidth ? im : null; });
+function getImage(id, url) {
+  let im = images.get(id);
+  if (!im) {
+    im = new Image();
+    im.src = url;
+    images.set(id, im);
+    im._ready = (im.decode ? im.decode() : new Promise((r) => { im.onload = r; })).catch(() => {}).then(() => requestRender());
+  }
+  return im._ready;
+}
+function loadAssets(p) {
+  p.assets = p.assets || {};
+  return Promise.all(Object.entries(p.assets).map(([id, url]) => getImage(id, url)));
+}
+function pruneAssets(p) {
+  if (!p.assets) return;
+  const used = new Set();
+  for (const L of p.layers) for (const k in L.keys) for (const el of L.keys[k].els) if (el.t === 'i') used.add(el.src);
+  for (const id of Object.keys(p.assets)) if (!used.has(id)) delete p.assets[id];
+}
+const readDataURL = (blob) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(blob); });
+async function importImageFile(file) {
+  if (!file || !(file.type || '').startsWith('image/')) return toast('That file isn’t an image');
+  if (!canEdit()) return;
+  const p = S.proj;
+  toast('Adding image…');
+  let url, iw, ih;
+  try {
+    const tmp = new Image();
+    const objUrl = URL.createObjectURL(file);
+    tmp.src = objUrl;
+    await tmp.decode();
+    iw = tmp.naturalWidth; ih = tmp.naturalHeight;
+    const maxSide = Math.min(4096, Math.max(2048, Math.max(p.w, p.h) * 2));
+    const keep = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type) && Math.max(iw, ih) <= maxSide && file.size < 12e6;
+    if (keep) url = await readDataURL(file);
+    else {
+      const s = Math.min(1, maxSide / Math.max(iw, ih));
+      iw = Math.max(1, Math.round(iw * s)); ih = Math.max(1, Math.round(ih * s));
+      const c = document.createElement('canvas'); c.width = iw; c.height = ih;
+      const x = c.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(tmp, 0, 0, iw, ih);
+      url = file.type === 'image/jpeg' ? c.toDataURL('image/jpeg', 0.92) : c.toDataURL('image/png');
+    }
+    URL.revokeObjectURL(objUrl);
+  } catch (e) { console.error(e); return toast('Couldn’t open that image'); }
+  const id = uid();
+  p.assets = p.assets || {};
+  p.assets[id] = url;
+  await getImage(id, url);
+  const s = Math.min(1, (0.8 * p.w) / iw, (0.8 * p.h) / ih), dw = iw * s, dh = ih * s;
+  const x0 = (p.w - dw) / 2, y0 = (p.h - dh) / 2;
+  const el = { t: 'i', src: id, iw, ih, pts: [[x0, y0], [x0 + dw, y0], [x0, y0 + dh]], a: 1, w: 0, c: '#000000', f: null };
+  pushUndo();
+  const els = editableEls();
+  els.push(el);
+  setTool('select');
+  S.sel = [els.length - 1];
+  changed(true);
+  toast('Image added. Drag to move it, and use the handles to resize or rotate.');
 }
 
 /* settings */
@@ -1161,7 +1227,9 @@ function frameSVG(f, bg) {
 }
 function svgDoc(inner, w, h) {
   const p = S.proj;
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${p.w} ${p.h}">${inner}</svg>`;
+  const used = [...new Set([...inner.matchAll(/href="#img-([\w]+)"/g)].map((m) => m[1]))];
+  const defs = used.length ? `<defs>${used.map((id) => { const im = images.get(id); return `<image id="img-${id}" width="${im?.naturalWidth || 1}" height="${im?.naturalHeight || 1}" href="${(p.assets || {})[id] || ''}"/>`; }).join('')}</defs>` : '';
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${p.w} ${p.h}">${defs}${inner}</svg>`;
 }
 function animatedSVG(w, h, bg) {
   const [a, b] = outRange(), n = b - a + 1, dur = n / S.proj.fps;
@@ -1246,6 +1314,7 @@ async function recordVideo(r, frames, fps, onProgress) {
 
 async function runExport() {
   readExportForm();
+  await loadAssets(S.proj);
   const x = X(), p = S.proj, fmt = x.fmt;
   const name = safeName($('#exName').value || p.name);
   const [w, h] = outSize(), fps = outFps(), bg = bgColor();
@@ -1490,6 +1559,15 @@ function wire() {
   $('#projName').onclick = openSettings;
   $('#btnExport').onclick = openExport;
   $('#btnHelp').onclick = () => $('#dlgHelp').showModal();
+  $('#btnImage').onclick = () => $('#imgInput').click();
+  $('#imgInput').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importImageFile(f); });
+  document.addEventListener('paste', (e) => {
+    if (e.target.matches && e.target.matches('input, textarea')) return;
+    const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith('image/'));
+    if (item) { e.preventDefault(); importImageFile(item.getAsFile()); }
+  });
+  wrap.addEventListener('dragover', (e) => e.preventDefault());
+  wrap.addEventListener('drop', (e) => { e.preventDefault(); const f = [...(e.dataTransfer?.files || [])].find((x) => x.type.startsWith('image/')); if (f) importImageFile(f); });
   $('#tPlay').onclick = togglePlay;
   $('#tPrev').onclick = () => { if (S.playing) stop(); goto(S.cur > 0 ? S.cur - 1 : S.proj.frameCount - 1); };
   $('#tNext').onclick = () => { if (S.playing) stop(); goto(S.cur + 1 < S.proj.frameCount ? S.cur + 1 : 0); };
@@ -1536,6 +1614,8 @@ async function init() {
   } catch (e) { console.warn(e); }
   if (!p) p = newProject('My first animation');
   S.proj = p;
+  pruneAssets(p);
+  loadAssets(p);
   S.layer = p.layers.length - 1;
   resize();
   fit();
