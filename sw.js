@@ -1,5 +1,5 @@
 // Offline support: serve app files from cache, refresh them in the background.
-const CACHE = 'inkframe-v3';
+const CACHE = 'inkframe-v4';
 const FILES = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/geom.js', 'js/gif.js', 'js/zip.js', 'js/db.js', 'js/icons.js', 'js/vendor/mp4-muxer.mjs',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 self.addEventListener('install', (e) => {

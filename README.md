@@ -16,7 +16,7 @@ A drawing and animation app for iPad (works in any modern browser too). Draw wit
 - Onion skin, playback at any frame rate, looping
 - Shape and motion tweens with easing
 - Undo/redo (two-finger tap / three-finger tap), pinch to zoom, palm rejection once the Pencil is used
-- Autosave on the device, several projects, project file backup (.inkframe)
+- Save like a desktop app: the first Save (⌘S) names the animation, then every change autosaves to it. Unsaved work is kept on the device until you save or discard it. Several projects, project file backup (.inkframe)
 - Export: GIF, MP4, PNG sequence (.zip), PNG frame, SVG frame, animated SVG
 
 No build step: it is plain HTML, CSS and JavaScript. Serve the folder with any static web server.

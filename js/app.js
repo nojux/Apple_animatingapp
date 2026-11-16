@@ -45,9 +45,11 @@ const S = {
   undo: [], redo: [],
 };
 
+// A new animation starts as an unsaved draft (DB.DRAFT_ID). The first Save names it and gives it
+// its own id; after that every change is saved to that same animation automatically.
 function newProject(name = 'Untitled animation') {
   return {
-    id: uid(), name, w: 1920, h: 1080, fps: 12, bg: '#ffffff', frameCount: 24,
+    id: DB.DRAFT_ID, name, w: 1920, h: 1080, fps: 12, bg: '#ffffff', frameCount: 24,
     layers: [{ id: uid(), name: 'Layer 1', visible: true, locked: false, keys: { 0: { els: [], tw: false } } }],
     created: Date.now(), updated: Date.now(),
   };
@@ -129,16 +131,76 @@ function changed(structure = true) {
   updateUndoButtons();
   updatePanel();
   requestRender();
+  markDirty();
+}
+function markDirty() {
+  S.dirty = true;
+  if (S.saveState !== 'error') setSaveState(isDraft() ? 'draft' : 'pending');
   clearTimeout(saveTimer);
   saveTimer = setTimeout(saveNow, 700);
 }
-async function saveNow() {
+const isDraft = () => S.proj.id === DB.DRAFT_ID;
+const draftHasWork = () => isDraft() && S.proj.updated > S.proj.created;
+const projMeta = (p) => ({ id: p.id, name: p.name, updated: p.updated, frames: p.frameCount, thumb: thumbnail() });
+function rememberLast(id) { try { localStorage.setItem('inkframe.last', id); } catch {} }
+
+// Saves run one after another, so a slow save can never land after (and overwrite) a newer one.
+let saveChain = Promise.resolve(true);
+function queueSave(job) {
+  const run = saveChain.then(job, job);
+  saveChain = run.catch(() => false);
+  return run;
+}
+// Write the current animation if it has unsaved changes. Resolves true when everything is stored.
+function saveNow() {
   clearTimeout(saveTimer);
-  if (!S.proj) return;
-  try {
-    await DB.saveProject(S.proj, { id: S.proj.id, name: S.proj.name, updated: S.proj.updated, frames: S.proj.frameCount, thumb: thumbnail() });
-    try { localStorage.setItem('inkframe.last', S.proj.id); } catch {}
-  } catch (e) { console.error(e); toast('Could not save. Is storage full?'); }
+  return queueSave(async () => {
+    const p = S.proj;
+    if (!p || !S.dirty) return S.saveState !== 'error';
+    S.dirty = false;
+    setSaveState(isDraft() ? 'draft' : 'saving');
+    try {
+      if (p.id === DB.DRAFT_ID) await DB.saveDraft(p);
+      else await DB.saveProject(p, projMeta(p));
+      if (S.proj === p && !S.dirty) setSaveState(isDraft() ? 'draft' : 'saved');
+      return true;
+    } catch (e) {
+      console.error(e);
+      if (S.proj === p) { S.dirty = true; setSaveState('error'); }
+      toast(e && e.name === 'QuotaExceededError'
+        ? 'Not saved: this iPad’s storage for Inkframe is full. Delete old animations or free up space.'
+        : 'Could not save your latest changes. They’ll be tried again.');
+      return false;
+    }
+  });
+}
+// First save of a draft, or saving a copy under a new name: give it its own id and store it.
+function saveAs(name) {
+  return queueSave(async () => {
+    const p = S.proj, oldId = p.id, wasDraft = oldId === DB.DRAFT_ID;
+    p.id = uid(); p.name = name; p.updated = Date.now();
+    try {
+      await DB.saveProject(p, projMeta(p), wasDraft ? DB.DRAFT_ID : null);
+    } catch (e) {
+      console.error(e);
+      p.id = oldId;
+      toast(e && e.name === 'QuotaExceededError' ? 'Not saved: storage is full.' : 'Could not save. Please try again.');
+      return false;
+    }
+    S.dirty = false; rememberLast(p.id);
+    setSaveState('saved'); updatePanel();
+    return true;
+  });
+}
+function setSaveState(st) {
+  S.saveState = st;
+  const b = $('#btnSave'); if (!b) return;
+  const label = { draft: 'Save', pending: 'Edited', saving: 'Saving…', saved: 'Saved', error: 'Not saved' }[st];
+  b.querySelector('.lbl').textContent = label;
+  b.className = 'tb save ' + st;
+  b.title = st === 'draft' ? 'Save this animation (⌘S)'
+    : st === 'error' ? 'Your latest changes could not be saved. Tap to try again.'
+      : 'Changes are saved to this animation automatically';
 }
 function thumbnail() {
   const p = S.proj, sc = Math.min(240 / p.w, 150 / p.h);
@@ -149,7 +211,7 @@ function thumbnail() {
   drawFrame(ctx, 0, true);
   return c.toDataURL('image/jpeg', 0.7);
 }
-window.addEventListener('pagehide', saveNow);
+window.addEventListener('pagehide', () => { saveNow(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(); });
 
 /* -------------------------------------------------------------- rendering */
@@ -978,60 +1040,158 @@ document.querySelectorAll('dialog').forEach((d) => {
 });
 
 /* projects */
+const DEFAULT_NAMES = ['Untitled animation', 'My first animation', 'Untitled'];
+const nameKey = (n) => n.trim().toLowerCase();
+async function uniqueName(base) {
+  const taken = new Set((await DB.listMeta()).map((m) => nameKey(m.name)));
+  if (!taken.has(nameKey(base))) return base;
+  for (let i = 2; ; i++) if (!taken.has(nameKey(`${base} ${i}`))) return `${base} ${i}`;
+}
+// Show a dialog and resolve with the value of the button that closed it ('' when dismissed).
+function ask(dlg) {
+  return new Promise((res) => {
+    dlg.returnValue = '';
+    dlg.addEventListener('close', () => res(dlg.returnValue), { once: true });
+    dlg.showModal();
+  });
+}
+// Ask for a name for the first save. Resolves the chosen name, or null if cancelled.
+async function askSaveName() {
+  const p = S.proj, input = $('#saveName'), err = $('#saveErr');
+  input.value = DEFAULT_NAMES.includes(p.name) ? '' : p.name;
+  input.placeholder = p.name;
+  err.hidden = true;
+  const taken = new Set((await DB.listMeta()).map((m) => nameKey(m.name)));
+  const dlg = $('#dlgSave');
+  let chosen = null;
+  const check = (e) => {
+    const n = (input.value || input.placeholder).trim().slice(0, 60);
+    if (!n) { e.preventDefault(); input.focus(); return; }
+    if (taken.has(nameKey(n))) {
+      e.preventDefault();
+      err.textContent = `You already have an animation called “${n}”. Pick another name.`;
+      err.hidden = false; input.focus(); return;
+    }
+    chosen = n;
+  };
+  $('#saveForm').addEventListener('submit', check);
+  setTimeout(() => input.focus(), 50);
+  const r = await ask(dlg);
+  $('#saveForm').removeEventListener('submit', check);
+  return r === 'save' ? chosen : null;
+}
+async function saveCommand() {
+  if (isDraft()) {
+    const name = await askSaveName();
+    if (name && await saveAs(name)) toast(`Saved as “${name}”. Changes will now save automatically.`);
+  } else {
+    S.dirty = S.dirty || S.saveState === 'error';
+    if (await saveNow()) { setSaveState('saved'); toast('All changes saved'); }
+  }
+}
+// Before switching away from the current animation. Resolves false if the switch should not happen.
+async function leaveCurrent() {
+  const ok = await saveNow();
+  if (!isDraft()) return ok || confirm('Your latest changes could not be saved. Continue anyway and lose them?');
+  if (draftHasWork()) {
+    $('#unsavedMsg').textContent = `Do you want to save “${S.proj.name}”? If you don’t, your drawing will be lost.`;
+    const c = await ask($('#dlgUnsaved'));
+    if (c === 'save') {
+      const name = await askSaveName();
+      return !!name && saveAs(name);
+    }
+    if (c !== 'discard') return false;
+  }
+  S.dirty = false;
+  await DB.deleteDraft().catch(() => {});
+  return true;
+}
 async function openProjects() {
   await saveNow();
-  const list = await DB.listMeta();
+  let list = [];
+  try { list = await DB.listMeta(); } catch (e) { console.error(e); toast('Could not read your saved animations'); }
+  $('#pDraft').hidden = !isDraft();
   $('#pList').innerHTML = list.map((m) => `
     <div class="pItem${m.id === S.proj.id ? ' cur' : ''}" data-id="${m.id}">
       <img src="${m.thumb || ''}" alt="" data-open="${m.id}">
       <div class="pn">${esc(m.name)}</div>
       <div class="pd">${m.frames || 1} frames · ${new Date(m.updated).toLocaleDateString()}</div>
       <div class="pa"><button data-open="${m.id}">Open</button><button data-dup="${m.id}">Copy</button><button data-save="${m.id}">Save file</button><button data-del="${m.id}">Delete</button></div>
-    </div>`).join('') || '<p class="hint">No animations yet.</p>';
-  $('#dlgProjects').showModal();
+    </div>`).join('') || '<p class="hint">No saved animations yet.</p>';
+  if (!$('#dlgProjects').open) $('#dlgProjects').showModal();
 }
-$('#pList').addEventListener('click', async (e) => {
+// Project-list actions can be slow (big animations); ignore taps while one is running.
+let busy = false;
+const guard = (fn) => async (...a) => { if (busy) return; busy = true; try { return await fn(...a); } finally { busy = false; } };
+$('#pDraftSave').onclick = guard(async () => { $('#dlgProjects').close(); await saveCommand(); });
+$('#pList').addEventListener('click', guard(async (e) => {
   const t = e.target.closest('[data-open],[data-dup],[data-del],[data-save]'); if (!t) return;
-  if (t.dataset.open) { await loadById(t.dataset.open); $('#dlgProjects').close(); }
-  else if (t.dataset.dup) {
+  if (t.dataset.open) {
+    if (t.dataset.open === S.proj.id) { $('#dlgProjects').close(); return; }
+    $('#dlgProjects').close();
+    if (!await leaveCurrent()) return;
+    await loadById(t.dataset.open);
+  } else if (t.dataset.dup) {
+    await saveNow();
     const p = await DB.loadProject(t.dataset.dup);
-    const c = { ...JSON.parse(JSON.stringify(p)), id: uid(), name: p.name + ' copy', updated: Date.now() };
-    await setProject(c); await saveNow(); openProjects();
+    if (!p) return toast('That animation could not be found');
+    const c = { ...JSON.parse(JSON.stringify(p)), id: uid(), name: await uniqueName(p.name + ' copy'), created: Date.now(), updated: Date.now() };
+    $('#dlgProjects').close();
+    if (!await leaveCurrent()) return;
+    setProject(c); S.dirty = true;
+    if (await saveNow()) toast(`Opened “${c.name}”`);
   } else if (t.dataset.save) {
+    await saveNow();
     const p = await DB.loadProject(t.dataset.save);
-    shareBlob(new Blob([JSON.stringify(p)], { type: 'application/json' }), safeName(p.name) + '.inkframe');
+    if (p) shareBlob(new Blob([JSON.stringify(p)], { type: 'application/json' }), safeName(p.name) + '.inkframe');
   } else if (t.dataset.del) {
     if (!confirm('Delete this animation? This can’t be undone.')) return;
-    await DB.deleteProject(t.dataset.del);
-    if (t.dataset.del === S.proj.id) {
+    const cur = t.dataset.del === S.proj.id;
+    if (cur) { clearTimeout(saveTimer); S.dirty = false; await saveChain; }
+    try { await DB.deleteProject(t.dataset.del); } catch (err) { console.error(err); return toast('Could not delete it'); }
+    if (cur) {
       const list = await DB.listMeta();
-      if (list.length) await loadById(list[0].id); else { await setProject(newProject()); await saveNow(); }
+      if (!list.length || !await loadById(list[0].id)) setProject(newProject());
     }
     openProjects();
   }
+}));
+$('#pNew').onclick = guard(async () => {
+  $('#dlgProjects').close();
+  if (!await leaveCurrent()) return;
+  setProject(newProject());
+  toast('New animation');
 });
-$('#pNew').onclick = async () => { await saveNow(); await setProject(newProject()); await saveNow(); $('#dlgProjects').close(); toast('New animation'); };
-$('#pImport').addEventListener('change', async (e) => {
+$('#pImport').addEventListener('change', guard(async (e) => {
   const file = e.target.files[0]; e.target.value = '';
   if (!file) return;
+  let p;
   try {
-    const p = JSON.parse(await file.text());
+    p = JSON.parse(await file.text());
     if (!p.layers || !p.w) throw new Error('bad');
-    p.id = uid(); p.updated = Date.now();
-    await saveNow(); await setProject(p); await saveNow();
-    $('#dlgProjects').close(); toast('Opened ' + p.name);
-  } catch { toast('That file isn’t an Inkframe project'); }
-});
+  } catch { return toast('That file isn’t an Inkframe project'); }
+  $('#dlgProjects').close();
+  if (!await leaveCurrent()) return;
+  p.id = uid(); p.name = await uniqueName(p.name || file.name.replace(/\.[^.]+$/, '') || 'Imported animation');
+  p.created = p.created || Date.now(); p.updated = Date.now();
+  setProject(p); S.dirty = true;
+  if (await saveNow()) toast('Opened ' + p.name);
+}));
 async function loadById(id) {
-  await saveNow();
-  const p = await DB.loadProject(id);
-  if (p) await setProject(p);
+  let p = null;
+  try { p = await DB.loadProject(id); } catch (e) { console.error(e); }
+  if (!p) { toast('That animation could not be opened'); return false; }
+  setProject(p);
+  return true;
 }
-async function setProject(p) {
+function setProject(p) {
   if (S.playing) stop();
+  clearTimeout(saveTimer);
   pruneAssets(p);
   loadAssets(p);
   S.proj = p; S.cur = 0; S.layer = Math.max(0, p.layers.length - 1); S.sel = []; S.undo = []; S.redo = [];
+  S.dirty = false; setSaveState(isDraft() ? 'draft' : 'saved');
+  rememberLast(p.id);
   fit(); renderTimeline(); updatePanel(); updateUndoButtons(); requestRender();
 }
 
@@ -1529,6 +1689,7 @@ function syncOnionPop() {
 
 let spaceDown = false;
 document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (!document.querySelector('dialog[open]')) saveCommand(); return; }
   if (e.target.matches('input, select, textarea') || document.querySelector('dialog[open]')) return;
   const k = e.key.toLowerCase(), mod = e.metaKey || e.ctrlKey;
   if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
@@ -1557,6 +1718,7 @@ function wire() {
   $('#btnProjects').onclick = openProjects;
   $('#btnSettings').onclick = openSettings;
   $('#projName').onclick = openSettings;
+  $('#btnSave').onclick = saveCommand;
   $('#btnExport').onclick = openExport;
   $('#btnHelp').onclick = () => $('#dlgHelp').showModal();
   $('#btnImage').onclick = () => $('#imgInput').click();
@@ -1606,17 +1768,23 @@ async function init() {
   buildTools();
   buildPanel();
   wire();
-  let p = null;
+  // Reopen what was open last: a saved animation, or the unsaved draft (so nothing is lost if iPadOS
+  // closed the app before the first Save).
+  let p = null, first = false;
   try {
-    const last = localStorage.getItem('inkframe.last');
+    let last = null;
+    try { last = localStorage.getItem('inkframe.last'); } catch {}
     if (last) p = await DB.loadProject(last);
+    if (!p) p = await DB.loadProject(DB.DRAFT_ID);
     if (!p) { const list = await DB.listMeta(); if (list.length) p = await DB.loadProject(list[0].id); }
-  } catch (e) { console.warn(e); }
-  if (!p) p = newProject('My first animation');
+  } catch (e) { console.warn(e); toast('Could not open your saved animations'); }
+  if (!p) { p = newProject('My first animation'); first = true; }
   S.proj = p;
   pruneAssets(p);
   loadAssets(p);
   S.layer = p.layers.length - 1;
+  S.dirty = false; setSaveState(isDraft() ? 'draft' : 'saved');
+  if (!first) rememberLast(p.id);
   resize();
   fit();
   setTool(prefs.tool);
