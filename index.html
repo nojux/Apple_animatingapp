@@ -134,7 +134,8 @@
 <div id="toast"></div>
 
 <div id="framePop" class="pop" hidden>
-  <h4 id="fpTitle">Frame 1</h4>
+  <div class="fpHead"><h4 id="fpTitle">Frame 1</h4><button class="x" id="fpClose" title="Close">✕</button></div>
+  <p class="hint fpHint" id="fpHint"></p>
   <div class="fpLen"><span>Frames picked</span><button data-fx="-1" title="One frame fewer">−</button><b id="fpLen">1</b><button data-fx="1" title="One frame more">+</button></div>
   <div class="seg"><button data-fs="layer">This layer</button><button data-fs="all">All layers</button></div>
   <div class="fpGrid">
@@ -149,7 +150,7 @@
     <button data-fa="before" title="Insert new frames before the picked frame"><span data-icon="insbefore"></span>Insert before</button>
     <button data-fa="after" title="Insert new frames after the picked frame"><span data-icon="insert"></span>Insert after</button>
   </div>
-  <p class="hint">Long-press a frame and drag sideways to pick several. Inserting pushes the later frames along.</p>
+  <p class="hint">Inserting pushes the later frames along.</p>
 </div>
 
 <div id="onionPop" class="pop" hidden>
@@ -317,7 +318,7 @@
     <p><b>Draw</b> with Apple Pencil. Once the Pencil is used, your fingers only move and zoom, so your palm won't leave marks.</p>
     <p><b>Gestures:</b> pinch to zoom, drag with two fingers to move, <b>two-finger tap to undo</b>, three-finger tap to redo.</p>
     <p><b>Frame by frame:</b> draw, then tap <b>Next blank</b> to move on and draw the next drawing. Onion skin shows the previous frame in red and the next one in green. Tap <b>Options</b> next to Onion to show it for just the current layer, or draw it in front of everything.</p>
-    <p><b>Copy and paste frames:</b> long-press a frame in the timeline (or tap <b>Frames</b>) and drag sideways to pick several. Tap <b>Copy</b>, then long-press where they should go and tap <b>Paste over</b> to replace frames, or <b>Insert before</b> / <b>Insert after</b> to add them in between. Switch to <b>All layers</b> to copy every layer at once.</p>
+    <p><b>Copy and paste frames:</b> tap <b>Frames</b> (or long-press a frame). While the menu is open, tap a frame, then tap another frame to pick every frame in between. Tap <b>Copy</b>, then tap the frame where they should go and tap <b>Paste over</b> to replace frames, or <b>Insert before</b> / <b>Insert after</b> to add them in between. Switch to <b>All layers</b> to copy every layer at once.</p>
     <p><b>Hold a drawing longer:</b> tap <b>Hold +1</b> to add a frame after the current one.</p>
     <p><b>Tweens:</b> draw on frame 1. Tap a later frame and tap <b>Keyframe</b>. Move, resize or reshape the drawing there with the Select tool. Go back to frame 1 and tap <b>Tween</b>. The frames in between are filled in automatically.</p>
     <p><b>Layers:</b> use the buttons at the top-left of the timeline. Tap a layer's name to choose it, double-tap to rename. The eye hides it and the lock protects it.</p>
