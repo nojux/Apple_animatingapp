@@ -57,7 +57,17 @@ export const saveProject = (p, meta, alsoDelete) => tx(['projects', 'meta'], 're
 });
 export const saveDraft = (p) => tx(['projects'], 'readwrite', (s) => { s.projects.put({ ...p, id: DRAFT_ID }); });
 export const deleteDraft = () => tx(['projects'], 'readwrite', (s) => { s.projects.delete(DRAFT_ID); });
-export const loadProject = (id) => tx(['projects'], 'readonly', (s) => s.projects.get(id));
+// Saved animations (format 2) keep each keyframe as a JSON string so autosave only re-encodes what
+// changed. Turn them back into normal objects on load. Older saves are already plain objects.
+function unpack(p) {
+  if (!p || p.fmt !== 2) return p;
+  const { fmt, ...rest } = p;
+  return {
+    ...rest,
+    layers: p.layers.map(({ packed, ...L }) => ({ ...L, keys: Object.fromEntries(Object.entries(packed || {}).map(([f, str]) => [f, JSON.parse(str)])) })),
+  };
+}
+export const loadProject = (id) => tx(['projects'], 'readonly', (s) => s.projects.get(id)).then(unpack);
 export const listMeta = () => tx(['meta'], 'readonly', (s) => s.meta.getAll())
   .then((a) => (a || []).filter((m) => m.id !== DRAFT_ID).sort((x, y) => y.updated - x.updated));
 export const deleteProject = (id) => tx(['projects', 'meta'], 'readwrite', (s) => {
