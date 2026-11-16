@@ -10,7 +10,7 @@ A drawing and animation app for iPad (works in any modern browser too). Draw wit
 3. Open Inkframe from its new icon. It runs full screen and works offline.
 
 ## Features
-- Vector brush with Apple Pencil pressure, even-width pen, partial or whole-stroke eraser
+- Vector brush with Apple Pencil pressure and six brush types (ink, smoke, airbrush, charcoal, watercolour, glow), even-width pen, partial or whole-stroke eraser
 - Line, rectangle and ellipse tools, fill tool, select / move / resize / rotate / flip
 - Timeline with layers (show/hide, lock, reorder, rename), keyframes, blank keyframes, held frames
 - Onion skin, playback at any frame rate, looping
