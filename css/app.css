@@ -210,6 +210,10 @@ input[type=color] { height: 38px; width: 80px; padding: 2px; background: var(--p
 
 /* frame menu */
 #framePop { width: 360px; }
+.fpHead { display: flex; align-items: center; justify-content: space-between; }
+.fpHead .x { min-height: 32px; height: 32px; margin-top: 6px; }
+.fpHint { margin: 0 0 10px; min-height: 2.6em; color: var(--accent2); }
+#tlControls .op#tFrames.on { background: var(--accent); border-color: var(--accent); }
 .fpLen { display: grid; grid-template-columns: 1fr 44px 34px 44px; gap: 8px; align-items: center; margin-bottom: 10px; }
 .fpLen button { min-height: 36px; padding: 0; font-size: 18px; }
 .fpLen b { text-align: center; }

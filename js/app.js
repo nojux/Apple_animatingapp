@@ -78,7 +78,7 @@ const activeLayer = () => S.proj.layers[S.layer];
 // Make sure the active layer has a keyframe at the current frame (if auto-keying), return its element array.
 function editableEls() {
   const L = activeLayer(), f = S.cur;
-  if (L.keys[f]) return L.keys[f].els;
+  if (L.keys[f]) { delete L.keys[f].auto; return L.keys[f].els; }
   const k = keyAt(L, f);
   if (prefs.autoKey || k < 0) {
     const prev = k >= 0 ? L.keys[k] : null;
@@ -794,11 +794,12 @@ function renderTimeline() {
       else if (ki >= 0) {
         const k = keys[ki], kf = L.keys[k];
         const nk = ki + 1 < keys.length ? keys[ki + 1] : -1;
-        if (k === f) cls.push(kf.els.length ? 'k' : 'ke');
+        // keyframes added by frame paste/insert just to keep a drawing going look like held frames
+        if (k === f && !kf.auto) cls.push(kf.els.length ? 'k' : 'ke');
         if (kf.tw && nk > 0 && f < nk) cls.push('tw');
         else if (kf.els.length) cls.push('h');
         const spanEnd = (nk > 0 ? Math.min(nk, p.frameCount) : p.frameCount) - 1;
-        if (f === spanEnd && f !== k && kf.els.length) cls.push('end');
+        if (f === spanEnd && f !== k && kf.els.length && !(nk > 0 && L.keys[nk].auto)) cls.push('end');
       }
       if ((f + 1) % 5 === 0) cls.push('f5');
       h += `<div class="${cls.join(' ')}" data-f="${f}"></div>`;
@@ -893,6 +894,13 @@ grid.addEventListener('click', (e) => {
   }
   const f = +t.dataset.f;
   const row = t.closest('[data-l]');
+  if (row && !$('#framePop').hidden) { // frame menu open: tap the first frame, then the last frame
+    const li = +row.dataset.l; if (S.layer !== li) { S.layer = li; S.sel = []; }
+    if (S.pickFrom == null) { S.range = { a: f, b: f }; S.pickFrom = f; }
+    else { S.range = { a: S.pickFrom, b: f }; S.pickFrom = null; }
+    goto(f, true); renderTimeline();
+    return;
+  }
   if (e.shiftKey && row) { // shift-click picks a run of frames
     S.range = { a: S.range ? S.range.a : S.cur, b: f };
   } else S.range = null;
@@ -912,7 +920,7 @@ function startRangeDrag() {
   if (S.playing) stop();
   if (S.layer !== d.li) { S.layer = d.li; S.sel = []; }
   S.range = { a: d.f, b: d.f };
-  $('#framePop').hidden = true;
+  closeFramePop();
   // Don't rebuild the timeline mid-gesture: the touched cell must stay in the page or the browser takes over the touch.
   grid.querySelectorAll('.tlRow[data-l]').forEach((r) => r.classList.toggle('active', +r.dataset.l === S.layer));
   goto(d.f, true);
@@ -937,7 +945,8 @@ document.addEventListener('pointermove', (e) => {
   const sr = scroller.getBoundingClientRect();
   if (e.clientX > sr.right - 40) scroller.scrollLeft += 14;
   else if (e.clientX < sr.left + 210) scroller.scrollLeft -= 14;
-  const f = frameAtX(e.clientX);
+  // ignore small finger wobble so a long-press doesn't pick the neighbouring frame too
+  const f = Math.abs(e.clientX - d.x) < cellWidth() * 0.6 ? d.f : frameAtX(e.clientX);
   if (f !== S.range.b) { S.range.b = f; updatePlayhead(false); }
 });
 const endRangeDrag = (e) => {
@@ -948,6 +957,7 @@ const endRangeDrag = (e) => {
   suppressClick = true; setTimeout(() => { suppressClick = false; }, 400);
   const r = frameRange();
   if (r.b >= S.proj.frameCount) S.proj.frameCount = r.b + 1;
+  S.pickFrom = r.a === r.b ? r.a : null; // a tap on another frame now picks everything in between
   renderTimeline(); updatePanel();
   if (e.type === 'pointerup') openFramePop();
 };
@@ -1003,6 +1013,7 @@ function frameOp(op) {
   const p = S.proj, L = activeLayer(), f = S.cur;
   if (L.locked && op !== 'tween') return toast('This layer is locked.');
   if (op === 'key') {
+    if (L.keys[f]?.auto) { pushUndo(); delete L.keys[f].auto; return changed(true); }
     if (L.keys[f]) return toast('This frame is already a keyframe');
     pushUndo();
     const k = keyAt(L, f), prev = k >= 0 ? L.keys[k] : null;
@@ -1056,7 +1067,8 @@ function frameRange() {
   return r ? { a: Math.min(r.a, r.b), b: Math.max(r.a, r.b) } : { a: S.cur, b: S.cur };
 }
 const allScope = () => prefs.frameScope === 'all';
-const bakeKey = (L, f) => ({ els: contentAt(L, f).map(cloneEl), tw: false });
+// auto: a keyframe added only so a drawing keeps looking the same; the timeline shows it as a held frame.
+const bakeKey = (L, f) => ({ els: contentAt(L, f).map(cloneEl), tw: false, auto: true });
 
 // Bake every in-between frame of the tween that starts at key k into its own keyframe (looks identical).
 function bakeTween(L, k) {
@@ -1074,7 +1086,7 @@ function cutAt(L, f) {
     if (k < 0) return; // nothing drawn up to f
     const kf = L.keys[k], tweening = kf.tw && nextKey(L, k) > 0;
     if (tweening && (kf.ease || 'linear') !== 'linear') bakeTween(L, k);
-    else L.keys[f] = { els: contentAt(L, f).map(cloneEl), tw: tweening, ease: kf.ease };
+    else L.keys[f] = { els: contentAt(L, f).map(cloneEl), tw: tweening, ease: kf.ease, auto: true };
   }
   // the drawing just before f must not tween into f
   const k = keyAt(L, f - 1);
@@ -1101,15 +1113,16 @@ function copyLayerFrames(L, a, b) {
     const kf = L.keys[k], nk = nextKey(L, k);
     const inTween = kf.tw && nk > 0;
     const tweenInside = inTween && k >= a && nk <= b; // both ends of the tween are copied
-    if (k === f) cells.push({ els: kf.els.map(cloneEl), tw: tweenInside, ease: kf.ease });
-    else if (f === a || (inTween && !tweenInside)) cells.push(bakeKey(L, f));
+    if (k === f) cells.push({ els: kf.els.map(cloneEl), tw: tweenInside, ease: kf.ease, auto: f !== a && kf.auto });
+    else if (f === a) cells.push({ els: contentAt(L, f).map(cloneEl), tw: false });
+    else if (inTween && !tweenInside) cells.push(bakeKey(L, f));
     else cells.push(null);
   }
   return cells;
 }
 // Lay copied cells into a layer at frame p (the frames there were cleared or shifted out of the way first).
 function writeCells(L, p, cells) {
-  cells.forEach((c, i) => { if (c) L.keys[p + i] = { els: c.els.map(cloneEl), tw: c.tw, ease: c.ease }; });
+  cells.forEach((c, i) => { if (c) L.keys[p + i] = { els: c.els.map(cloneEl), tw: c.tw, ease: c.ease, ...(c.auto ? { auto: true } : {}) }; });
 }
 
 function copyFrames(quiet) {
@@ -1119,7 +1132,7 @@ function copyFrames(quiet) {
   const assets = {};
   for (const l of layers) for (const c of l.cells) if (c) for (const el of c.els) if (el.t === 'i' && p.assets?.[el.src]) assets[el.src] = p.assets[el.src];
   S.frameClip = { n: b - a + 1, all: allScope(), layers, assets };
-  if (!quiet) toast(`Copied ${plural(b - a + 1)}${allScope() ? ' from all layers' : ''}. Long-press another frame to paste or insert.`);
+  if (!quiet) toast(`Copied ${plural(b - a + 1)}${allScope() ? ' from all layers' : ''}. Now tap the frame where they should go.`);
   syncFramePop();
 }
 const plural = (n) => `${n} frame${n === 1 ? '' : 's'}`;
@@ -1194,8 +1207,9 @@ function deleteFrames() {
 }
 
 function frameAction(act) {
+  S.pickFrom = null; // the next tap on a frame starts a new pick (e.g. where to paste)
   if (act === 'copy') return copyFrames();
-  if (act === 'cut') { const keep = S.frameClip; copyFrames(true); if (!deleteFrames()) { S.frameClip = keep; return; } return toast(`Cut ${plural(S.frameClip.n)}. Long-press a frame to paste or insert them.`); }
+  if (act === 'cut') { const keep = S.frameClip; copyFrames(true); if (!deleteFrames()) { S.frameClip = keep; return; } return toast(`Cut ${plural(S.frameClip.n)}. Tap the frame where they should go, then Paste or Insert.`); }
   if (act === 'del') { deleteFrames(); return syncFramePop(); }
   if (act === 'dup') { const keep = S.frameClip; copyFrames(true); pasteFrames('after'); S.frameClip = keep; return syncFramePop(); }
   pasteFrames(act);
@@ -1205,7 +1219,7 @@ function frameAction(act) {
 // Popover with the frame commands. It opens from the Frames button, or by long-pressing a frame.
 function openFramePop() {
   const pop = $('#framePop');
-  pop.hidden = false; syncFramePop();
+  pop.hidden = false; $('#tFrames').classList.add('on'); syncFramePop();
   const w = pop.offsetWidth, h = pop.offsetHeight;
   const sel = $('#rangeSel'), cs = $('#cellSel');
   const anchor = (sel && !sel.hidden ? sel : cs)?.getBoundingClientRect();
@@ -1214,12 +1228,19 @@ function openFramePop() {
   pop.style.left = clamp(cx - w / 2, 8, innerWidth - w - 8) + 'px';
   pop.style.top = Math.max(8, tl.top - h - 8) + 'px';
 }
+function closeFramePop() {
+  $('#framePop').hidden = true; $('#tFrames').classList.remove('on'); S.pickFrom = null;
+}
 function syncFramePop() {
   const pop = $('#framePop');
   if (!pop || pop.hidden) return;
   const { a, b } = frameRange(), n = b - a + 1;
   $('#fpTitle').textContent = n === 1 ? `Frame ${a + 1}` : `Frames ${a + 1}–${b + 1}`;
   $('#fpLen').textContent = n;
+  $('#fpHint').textContent = S.pickFrom != null
+    ? `Tap another frame to pick every frame from ${S.pickFrom + 1} up to it.`
+    : S.frameClip ? 'Tap the frame where the copied frames should go, then Paste over or Insert. Tap a frame, then another, to pick a run of frames.'
+      : 'Tap a frame, then tap another frame to pick every frame in between. Or long-press a frame and drag.';
   pop.querySelectorAll('[data-fs]').forEach((x) => x.classList.toggle('on', x.dataset.fs === (allScope() ? 'all' : 'layer')));
   const clip = S.frameClip;
   $('#fpClip').textContent = clip ? `Paste ${plural(clip.n)}${clip.all ? ' (all layers)' : ''}` : 'Paste (copy frames first)';
@@ -2033,7 +2054,7 @@ document.addEventListener('keydown', (e) => {
   if (k === '.' || k === 'arrowright') { goto(S.cur + 1 >= S.proj.frameCount ? 0 : S.cur + 1); return; }
   if ((k === 'delete' || k === 'backspace') && S.sel.length) { $('#selDelete').click(); return; }
   if ((k === 'delete' || k === 'backspace') && S.range) { frameAction('del'); return; }
-  if (k === 'escape' && S.range) { S.range = null; $('#framePop').hidden = true; updatePlayhead(false); return; }
+  if (k === 'escape' && S.range) { S.range = null; closeFramePop(); updatePlayhead(false); return; }
   if (e.key === 'F6') { e.preventDefault(); frameOp('key'); }
   if (e.key === 'F7') { e.preventDefault(); frameOp('blank'); }
   if (e.key === 'F5') { e.preventDefault(); frameOp('insert'); }
@@ -2088,8 +2109,9 @@ function wire() {
     savePrefs(); syncOnionPop(); updatePanel(); renderTimeline(); requestRender();
   });
   $('#onionOpacity').addEventListener('input', (e) => { prefs.onionOpacity = +e.target.value; savePrefs(); requestRender(); });
-  $('#tFrames').onclick = (e) => { e.stopPropagation(); const pop = $('#framePop'); if (pop.hidden) openFramePop(); else pop.hidden = true; };
-  document.addEventListener('pointerdown', (e) => { const pop = $('#framePop'); if (!pop.hidden && !e.target.closest('#framePop, #tFrames')) pop.hidden = true; });
+  $('#tFrames').onclick = (e) => { e.stopPropagation(); if ($('#framePop').hidden) { S.pickFrom = null; if (!S.range) S.range = { a: S.cur, b: S.cur }; updatePlayhead(false); openFramePop(); } else closeFramePop(); };
+  $('#fpClose').onclick = closeFramePop;
+  document.addEventListener('pointerdown', (e) => { if (!$('#framePop').hidden && !e.target.closest('#framePop, #tFrames, .tlRow[data-l] .c, #tlScroll')) closeFramePop(); });
   $('#framePop').addEventListener('click', (e) => {
     const b = e.target.closest('[data-fa],[data-fs],[data-fx]'); if (!b || b.disabled) return;
     if (b.dataset.fa) return frameAction(b.dataset.fa);
