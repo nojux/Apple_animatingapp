@@ -98,35 +98,87 @@ function canEdit() {
 
 /* ------------------------------------------------------------ undo / save */
 
-const snap = () => JSON.stringify({ layers: S.proj.layers, frameCount: S.proj.frameCount });
-function pushUndo() {
-  S.undo.push(snap());
+// Undo entries. Most edits (strokes, shapes, eraser, fill, selection) only touch one keyframe of
+// one layer, so they store just that keyframe ("key" entries). Copying the whole animation on
+// every stroke made drawing lag on long animations. Timeline and settings changes store everything.
+const snapFull = () => ({ k: 'full', d: JSON.stringify({ layers: S.proj.layers, frameCount: S.proj.frameCount }) });
+function snapKey(layerId = activeLayer().id, f = S.cur) {
+  const L = S.proj.layers.find((x) => x.id === layerId);
+  if (!L) return snapFull();
+  return { k: 'key', l: layerId, f, d: L.keys[f] ? JSON.stringify(L.keys[f]) : null, fc: S.proj.frameCount };
+}
+const snap = (scope) => (scope === 'key' ? snapKey() : snapFull());
+// The opposite entry for undo/redo: the current state of whatever `e` would overwrite.
+const counterpart = (e) => (e.k === 'key' ? snapKey(e.l, e.f) : snapFull());
+function addUndo(entry) {
+  S.undo.push(entry);
   if (S.undo.length > 80) S.undo.shift();
   S.redo.length = 0;
+  editScope = entry.k;
   updateUndoButtons();
 }
-function restore(str) {
-  const d = JSON.parse(str);
-  S.proj.layers = d.layers; S.proj.frameCount = d.frameCount;
+function pushUndo(scope) { addUndo(snap(scope)); }
+function restore(e) {
+  if (e.k === 'key') {
+    const L = S.proj.layers.find((x) => x.id === e.l);
+    if (L) { if (e.d) L.keys[e.f] = JSON.parse(e.d); else delete L.keys[e.f]; }
+    S.proj.frameCount = e.fc;
+    editScope = 'key';
+  } else {
+    const d = JSON.parse(e.d);
+    S.proj.layers = d.layers; S.proj.frameCount = d.frameCount;
+    editScope = 'full';
+  }
+  S.cur = Math.min(S.cur, S.proj.frameCount - 1);
   S.layer = clamp(S.layer, 0, S.proj.layers.length - 1);
   S.sel = [];
 }
 function undo() {
   if (!S.undo.length) return toast('Nothing to undo');
-  S.redo.push(snap()); restore(S.undo.pop()); changed(true);
+  const e = S.undo.pop(); S.redo.push(counterpart(e)); restore(e); changed(true);
 }
 function redo() {
   if (!S.redo.length) return toast('Nothing to redo');
-  S.undo.push(snap()); restore(S.redo.pop()); changed(true);
+  const e = S.redo.pop(); S.undo.push(counterpart(e)); restore(e); changed(true);
 }
 function updateUndoButtons() {
   $('#btnUndo').disabled = !S.undo.length;
   $('#btnRedo').disabled = !S.redo.length;
 }
 
+/* Saving.
+   Each keyframe is stored as its own JSON string, cached until that keyframe is edited, so an
+   autosave only re-encodes what changed. Copying a string into storage is fast; copying a whole
+   animation's worth of stroke points froze drawing for a second or more on long animations. */
+let keyCache = new WeakMap(); // keyframe object -> JSON string
+let editScope = 'full'; // what the latest undo step covers: 'key' (current keyframe) or 'full'
+function invalidateEdited() {
+  if (editScope === 'key') {
+    const L = activeLayer();
+    if (L) { keyCache.delete(L.keys[S.cur]); keyCache.delete(L.keys[keyAt(L, S.cur)]); }
+  } else keyCache = new WeakMap();
+}
+function packProject(p) {
+  return {
+    ...p,
+    fmt: 2,
+    layers: p.layers.map(({ keys, ...L }) => {
+      const packed = {};
+      for (const f in keys) {
+        const kf = keys[f];
+        let str = keyCache.get(kf);
+        if (str === undefined) { str = JSON.stringify(kf); keyCache.set(kf, str); }
+        packed[f] = str;
+      }
+      return { ...L, packed };
+    }),
+  };
+}
+
 let saveTimer = null;
 function changed(structure = true) {
   S.proj.updated = Date.now();
+  invalidateEdited();
   if (structure) renderTimeline(); else updatePlayhead();
   updateUndoButtons();
   updatePanel();
@@ -134,14 +186,26 @@ function changed(structure = true) {
   markDirty();
 }
 function markDirty() {
-  S.dirty = true;
+  S.dirty = true; S.thumbStale = true;
   if (S.saveState !== 'error') setSaveState(isDraft() ? 'draft' : 'pending');
+  scheduleSave(1500);
+}
+// Autosave once drawing pauses: never while the Pencil or a finger is down on the canvas.
+function scheduleSave(ms) {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveNow, 700);
+  saveTimer = setTimeout(() => {
+    if (action || gesture) return scheduleSave(600);
+    if (window.requestIdleCallback) requestIdleCallback(() => { if (action || gesture) scheduleSave(600); else saveNow(); }, { timeout: 1000 });
+    else saveNow();
+  }, ms);
 }
 const isDraft = () => S.proj.id === DB.DRAFT_ID;
 const draftHasWork = () => isDraft() && S.proj.updated > S.proj.created;
-const projMeta = (p) => ({ id: p.id, name: p.name, updated: p.updated, frames: p.frameCount, thumb: thumbnail() });
+// The list thumbnail is only redrawn when you leave the animation or open the list, not on every autosave.
+function projMeta(p, freshThumb) {
+  if (freshThumb || !S.thumb) { S.thumb = thumbnail(); S.thumbStale = false; }
+  return { id: p.id, name: p.name, updated: p.updated, frames: p.frameCount, thumb: S.thumb };
+}
 function rememberLast(id) { try { localStorage.setItem('inkframe.last', id); } catch {} }
 
 // Saves run one after another, so a slow save can never land after (and overwrite) a newer one.
@@ -152,16 +216,19 @@ function queueSave(job) {
   return run;
 }
 // Write the current animation if it has unsaved changes. Resolves true when everything is stored.
-function saveNow() {
+// final: also refresh the list thumbnail (leaving the animation, opening the list, app going away).
+function saveNow(final = false) {
   clearTimeout(saveTimer);
   return queueSave(async () => {
     const p = S.proj;
-    if (!p || !S.dirty) return S.saveState !== 'error';
+    if (!p) return true;
+    const thumbOnly = !S.dirty && final && S.thumbStale && !isDraft();
+    if (!S.dirty && !thumbOnly) return S.saveState !== 'error';
     S.dirty = false;
-    setSaveState(isDraft() ? 'draft' : 'saving');
+    if (!thumbOnly) setSaveState(isDraft() ? 'draft' : 'saving');
     try {
-      if (p.id === DB.DRAFT_ID) await DB.saveDraft(p);
-      else await DB.saveProject(p, projMeta(p));
+      if (p.id === DB.DRAFT_ID) await DB.saveDraft(packProject(p));
+      else await DB.saveProject(packProject(p), projMeta(p, final && S.thumbStale));
       if (S.proj === p && !S.dirty) setSaveState(isDraft() ? 'draft' : 'saved');
       return true;
     } catch (e) {
@@ -180,7 +247,7 @@ function saveAs(name) {
     const p = S.proj, oldId = p.id, wasDraft = oldId === DB.DRAFT_ID;
     p.id = uid(); p.name = name; p.updated = Date.now();
     try {
-      await DB.saveProject(p, projMeta(p), wasDraft ? DB.DRAFT_ID : null);
+      await DB.saveProject(packProject(p), projMeta(p, true), wasDraft ? DB.DRAFT_ID : null);
     } catch (e) {
       console.error(e);
       p.id = oldId;
@@ -211,8 +278,8 @@ function thumbnail() {
   drawFrame(ctx, 0, true);
   return c.toDataURL('image/jpeg', 0.7);
 }
-window.addEventListener('pagehide', () => { saveNow(); });
-document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(); });
+window.addEventListener('pagehide', () => { saveNow(true); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(true); });
 
 /* -------------------------------------------------------------- rendering */
 
@@ -467,7 +534,7 @@ function startAction(e, x, y) {
     action.x1 = sx; action.y1 = sy;
   } else if (tool === 'eraser') {
     if (!canEdit()) { action = null; return; }
-    action.undoSnap = snap(); action.changed = false;
+    action.undoSnap = snap('key'); action.changed = false; editScope = 'key';
     action.last = [sx, sy];
     eraseAlong(sx, sy, sx, sy);
     drawEraserCursor(x, y);
@@ -512,24 +579,24 @@ function endAction(e) {
   if (a.tool === 'brush' || a.tool === 'pen') {
     if (a.raw) { const lp = a.pts[a.pts.length - 1]; if (Math.hypot(a.raw[0] - lp[0], a.raw[1] - lp[1]) > 0.5 / S.view.s) a.pts.push(a.raw); }
     const el = makeStroke(a.pts);
-    pushUndo();
+    pushUndo('key');
     editableEls().push(el);
     changed(true);
   } else if (a.tool === 'line' || a.tool === 'rect' || a.tool === 'ellipse') {
     const el = makeShape(a);
     if (!el) return;
-    pushUndo();
+    pushUndo('key');
     editableEls().push(el);
     changed(true);
   } else if (a.tool === 'eraser') {
-    if (a.changed) { S.undo.push(a.undoSnap); S.redo.length = 0; changed(true); }
+    if (a.changed) { addUndo(a.undoSnap); changed(true); }
   } else if (a.tool === 'fill') {
     if (!canEdit()) return;
     const els = contentAt(activeLayer(), S.cur);
     let idx = -1;
     for (let i = els.length - 1; i >= 0; i--) if (fillable(els[i], sx, sy)) { idx = i; break; }
     if (idx < 0) { toast('Tap inside a closed shape or loop to fill it'); return; }
-    pushUndo();
+    pushUndo('key');
     editableEls()[idx].f = prefs.color;
     changed(true);
   } else if (a.tool === 'select') {
@@ -541,7 +608,7 @@ function cancelAction() {
   clearOverlay();
   if (!a) return;
   if (a.tool === 'eraser' && a.changed) { restore(a.undoSnap); changed(true); }
-  if (a.tool === 'select' && a.started) { restore(a.undoSnap); S.undo.pop(); changed(true); }
+  if (a.tool === 'select' && a.started) { S.undo.pop(); restore(a.undoSnap); changed(true); updateUndoButtons(); }
   marquee = null;
   requestRender();
 }
@@ -632,7 +699,7 @@ function startSelect(x, y, sx, sy) {
     else { S.sel = []; a.mode = 'marquee'; marquee = { x0: x, y0: y, x1: x, y1: y }; updatePanel(); requestRender(); return; }
   }
   if (L.locked) { toast('This layer is locked.'); a.mode = 'none'; return; }
-  a.undoSnap = snap();
+  a.undoSnap = snap('key');
   a.started = false;
   a.box = unionBox(selEls());
   a.orig = null;
@@ -648,7 +715,7 @@ function moveSelect(x, y, sx, sy) {
   if (!a.started) {
     if (Math.hypot(x - a.sx, y - a.sy) < 3) return;
     a.started = true;
-    S.undo.push(a.undoSnap); S.redo.length = 0;
+    addUndo(a.undoSnap);
     const els = editableEls();
     a.orig = S.sel.map((i) => cloneEl(els[i]));
   }
@@ -686,7 +753,7 @@ function endSelect(a) {
 function selOp(fn, needsSel = true) {
   if (needsSel && !S.sel.length) return toast('Select something first');
   if (!canEdit()) return;
-  pushUndo();
+  pushUndo('key');
   const els = editableEls();
   fn(els);
   changed(true);
@@ -1091,7 +1158,7 @@ async function saveCommand() {
 }
 // Before switching away from the current animation. Resolves false if the switch should not happen.
 async function leaveCurrent() {
-  const ok = await saveNow();
+  const ok = await saveNow(true);
   if (!isDraft()) return ok || confirm('Your latest changes could not be saved. Continue anyway and lose them?');
   if (draftHasWork()) {
     $('#unsavedMsg').textContent = `Do you want to save “${S.proj.name}”? If you don’t, your drawing will be lost.`;
@@ -1107,7 +1174,7 @@ async function leaveCurrent() {
   return true;
 }
 async function openProjects() {
-  await saveNow();
+  await saveNow(true);
   let list = [];
   try { list = await DB.listMeta(); } catch (e) { console.error(e); toast('Could not read your saved animations'); }
   $('#pDraft').hidden = !isDraft();
@@ -1250,7 +1317,7 @@ async function importImageFile(file) {
   const s = Math.min(1, (0.8 * p.w) / iw, (0.8 * p.h) / ih), dw = iw * s, dh = ih * s;
   const x0 = (p.w - dw) / 2, y0 = (p.h - dh) / 2;
   const el = { t: 'i', src: id, iw, ih, pts: [[x0, y0], [x0 + dw, y0], [x0, y0 + dh]], a: 1, w: 0, c: '#000000', f: null };
-  pushUndo();
+  pushUndo('key');
   const els = editableEls();
   els.push(el);
   setTool('select');
