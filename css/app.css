@@ -258,3 +258,9 @@ dialog.wide { padding-bottom: 0; }
 #exWork, #exDone { padding-bottom: 16px; }
 .exGroup h4 { margin: 8px 0 6px; }
 .exGroup { padding-bottom: 8px; }
+
+/* Brush type picker */
+#brushStyles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+#brushStyles button { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 2px 5px; border: 1px solid var(--line); border-radius: 9px; font-size: 11px; min-width: 0; }
+#brushStyles canvas { width: 100%; max-width: 66px; height: auto; aspect-ratio: 132 / 56; background: #fff; border-radius: 5px; }
+#brushStyles button.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }

@@ -1,6 +1,6 @@
 import { icon, fillIcons } from './icons.js';
 import {
-  drawEl, elSVG, bbox, unionBox, hitEl, fillable, eraseEl, interpolate, EASES, mapPts, cloneEl, setImageSource,
+  drawEl, elSVG, BRUSH_STYLES, bbox, unionBox, hitEl, fillable, eraseEl, interpolate, EASES, mapPts, cloneEl, setImageSource,
 } from './geom.js';
 import { encodeGIF } from './gif.js';
 import { makeZip } from './zip.js';
@@ -18,9 +18,14 @@ const prefs = loadPrefs();
 function loadPrefs() {
   const d = {
     tool: 'brush', color: '#1d1d24', recent: [], finger: 'auto', autoKey: true, onionPrev: 2, onionNext: 1,
-    onion: true, onionLayers: 'all', onionFront: false, onionOpacity: 35, frameScope: 'layer', loop: true, eraserMode: 'partial', shapeFill: false, helpSeen: false,
+    onion: true, onionLayers: 'all', onionFront: false, onionOpacity: 35, frameScope: 'layer', loop: true, eraserMode: 'partial', shapeFill: false, helpSeen: false, brushStyle: 'ink',
     tools: {
       brush: { size: 8, opacity: 100, smoothing: 45, pressure: true },
+      smoke: { size: 40, opacity: 80, smoothing: 60, pressure: true },
+      air: { size: 36, opacity: 60, smoothing: 45, pressure: true },
+      charcoal: { size: 14, opacity: 100, smoothing: 30, pressure: true },
+      water: { size: 30, opacity: 100, smoothing: 50, pressure: true },
+      glow: { size: 12, opacity: 100, smoothing: 45, pressure: true },
       pen: { size: 3, opacity: 100, smoothing: 30 },
       eraser: { size: 24 },
       line: { size: 4, opacity: 100 }, rect: { size: 4, opacity: 100 }, ellipse: { size: 4, opacity: 100 },
@@ -510,7 +515,9 @@ for (const t of ['gesturestart', 'gesturechange', 'gestureend']) document.addEve
 
 /* ---------------------------------------------------------------- tools */
 
-const T = () => prefs.tools[prefs.tool] || {};
+// The brush tool has several brush types (smoke, airbrush...); each keeps its own size and opacity.
+const brushKey = () => (BRUSH_STYLES.includes(prefs.brushStyle) && prefs.brushStyle !== 'ink' ? prefs.brushStyle : 'brush');
+const T = () => prefs.tools[prefs.tool === 'brush' ? brushKey() : prefs.tool] || {};
 let lastPressure = 0.5;
 function pressureOf(e, start = false) {
   if (e.pointerType !== 'pen') return 1;
@@ -569,7 +576,15 @@ function moveAction(evs) {
       moveSelect(x, y, sx, sy);
     }
   }
-  if (a.tool !== 'eraser' && a.tool !== 'select') drawLive();
+  if (a.tool !== 'eraser' && a.tool !== 'select') queueLive();
+}
+// Redraw the stroke in progress at most once per screen refresh. The Pencil can report 240 points a
+// second; redrawing for each one wasted time, most of all with the soft brushes.
+let liveQueued = false;
+function queueLive() {
+  if (liveQueued) return;
+  liveQueued = true;
+  requestAnimationFrame(() => { liveQueued = false; if (action && action.tool !== 'eraser' && action.tool !== 'select') drawLive(); });
 }
 function endAction(e) {
   const a = action; action = null;
@@ -615,10 +630,12 @@ function cancelAction() {
 
 function makeStroke(pts) {
   const t = prefs.tool, o = T();
-  return {
+  const el = {
     t: 'b', pts: pts.map((p) => [round1(p[0]), round1(p[1]), Math.round(p[2] * 100) / 100]),
     c: prefs.color, w: o.size, pr: t === 'brush' ? !!o.pressure : false, a: (o.opacity ?? 100) / 100, f: null,
   };
+  if (t === 'brush' && brushKey() !== 'brush') el.st = brushKey();
+  return el;
 }
 const round1 = (v) => Math.round(v * 10) / 10;
 function shapePts(a) {
@@ -1301,6 +1318,8 @@ function updatePanel() {
   show('#secOpacity', 'opacity' in o);
   show('#secSmooth', 'smoothing' in o);
   show('#secPressure', t === 'brush');
+  show('#secStyle', t === 'brush');
+  document.querySelectorAll('#brushStyles button').forEach((b) => b.classList.toggle('on', b.dataset.st === (prefs.brushStyle || 'ink')));
   show('#secShapeFill', t === 'rect' || t === 'ellipse');
   show('#secEraser', t === 'eraser');
   show('#secSel', t === 'select');
@@ -1310,7 +1329,7 @@ function updatePanel() {
   if ('size' in o) { $('#size').value = o.size; $('#sizeVal').textContent = o.size + ' px'; }
   if ('opacity' in o) { $('#opacity').value = o.opacity; $('#opVal').textContent = o.opacity + '%'; }
   if ('smoothing' in o) { $('#smoothing').value = o.smoothing; $('#smVal').textContent = o.smoothing + '%'; }
-  $('#pressure').checked = !!prefs.tools.brush.pressure;
+  $('#pressure').checked = !!(prefs.tool === 'brush' ? T() : prefs.tools.brush).pressure;
   $('#shapeFill').checked = !!prefs.shapeFill;
   document.querySelectorAll('#eraserMode button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.eraserMode));
   $('#selCount').textContent = S.sel.length ? `${S.sel.length} item${S.sel.length > 1 ? 's' : ''}` : 'none';
@@ -1323,6 +1342,25 @@ function updatePanel() {
   $('#tLoop').classList.toggle('on', prefs.loop);
   $('#fps').value = S.proj.fps;
   $('#projName').textContent = S.proj.name;
+}
+const STYLE_NAMES = { ink: 'Ink', smoke: 'Smoke', air: 'Airbrush', charcoal: 'Charcoal', water: 'Watercolour', glow: 'Glow' };
+function buildBrushStyles() {
+  const box = $('#brushStyles');
+  box.innerHTML = BRUSH_STYLES.map((st) => `<button data-st="${st}" title="${STYLE_NAMES[st]}"><canvas width="132" height="56"></canvas><span>${STYLE_NAMES[st]}</span></button>`).join('');
+  box.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-st]'); if (!b) return;
+    prefs.brushStyle = b.dataset.st; savePrefs(); updatePanel();
+  });
+  // Small preview of each brush: an S-curve that swells in the middle, like a pressure stroke.
+  for (const b of box.querySelectorAll('button')) {
+    const c = b.querySelector('canvas'), x = c.getContext('2d'), st = b.dataset.st;
+    const pts = [];
+    for (let i = 0; i <= 40; i++) { const t = i / 40; pts.push([12 + t * 108, 28 + Math.sin(t * Math.PI * 2) * 11, 0.25 + 0.75 * Math.sin(t * Math.PI)]); }
+    const w = { ink: 9, smoke: 20, air: 18, charcoal: 11, water: 16, glow: 8 }[st];
+    const el = { t: 'b', pts, c: st === 'glow' ? '#33a7ff' : '#3a3a48', w, pr: true, a: 1, f: null };
+    if (st !== 'ink') el.st = st;
+    drawEl(x, el);
+  }
 }
 function setColor(c, addRecent = true) {
   prefs.color = c.toLowerCase();
@@ -1343,7 +1381,8 @@ function buildPanel() {
   $('#colorInput').addEventListener('change', (e) => setColor(e.target.value));
   const bindRange = (id, key) => $(id).addEventListener('input', (e) => { T()[key] = +e.target.value; savePrefs(); updatePanel(); });
   bindRange('#size', 'size'); bindRange('#opacity', 'opacity'); bindRange('#smoothing', 'smoothing');
-  $('#pressure').addEventListener('change', (e) => { prefs.tools.brush.pressure = e.target.checked; savePrefs(); });
+  $('#pressure').addEventListener('change', (e) => { T().pressure = e.target.checked; savePrefs(); });
+  buildBrushStyles();
   $('#shapeFill').addEventListener('change', (e) => { prefs.shapeFill = e.target.checked; savePrefs(); });
   $('#eraserMode').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { prefs.eraserMode = b.dataset.v; savePrefs(); updatePanel(); } });
 

@@ -1,6 +1,6 @@
 // Geometry: stroke outlines, paths, hit testing, resampling, tween interpolation.
 // Element shapes:
-//   brush: { t:'b', pts:[[x,y,p],...], c:color, w:size, pr:usePressure, a:opacity, f:fillColor|null }
+//   brush: { t:'b', pts:[[x,y,p],...], c:color, w:size, pr:usePressure, a:opacity, f:fillColor|null, st?:style }
 //   poly : { t:'p', pts:[[x,y],...],   c:color, w:width, cl:closed,     a:opacity, f:fillColor|null }
 
 const r2 = (v) => Math.round(v * 100) / 100;
@@ -44,7 +44,7 @@ export function brushOutline(el) {
   if (!raw.length) return [];
   let len = 0;
   for (let i = 1; i < raw.length; i++) len += Math.hypot(raw[i][0] - raw[i - 1][0], raw[i][1] - raw[i - 1][1]);
-  const step = Math.max(0.6, el.w / 10, len / 4000);
+  const step = Math.max(0.6, el.w / 10, len / 4000, el.ms || 0);
   const pts = spline(raw, step), n = pts.length;
   // Smooth pressure along the stroke so the edge never "beads" or steps.
   const rad = new Array(n);
@@ -163,8 +163,10 @@ export function drawEl(ctx, el, alphaMul = 1) {
   if (a <= 0) return;
   ctx.globalAlpha = a;
   if (el.f && el.pts.length > 2) { ctx.fillStyle = el.f; ctx.fill(path2d(el, 'fill')); }
-  if (el.t === 'b') { ctx.fillStyle = el.c; ctx.fill(path2d(el, 'ink')); }
-  else if (el.w > 0) {
+  if (el.t === 'b') {
+    if (el.st && PASSES[el.st]) drawStyled(ctx, el, a);
+    else { ctx.fillStyle = el.c; ctx.fill(path2d(el, 'ink')); }
+  } else if (el.w > 0) {
     ctx.strokeStyle = el.c; ctx.lineWidth = el.w; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
     ctx.stroke(path2d(el, 'ink'));
   }
@@ -180,7 +182,7 @@ export function elSVG(el, alphaMul = 1) {
   let s = '';
   const op = a < 1 ? ` opacity="${r2(a)}"` : '';
   if (el.f && el.pts.length > 2) s += `<path d="${fillD(el)}" fill="${el.f}"${op}/>`;
-  if (el.t === 'b') s += `<path d="${inkD(el)}" fill="${el.c}"${op}/>`;
+  if (el.t === 'b') s += el.st && PASSES[el.st] ? styledSVG(el, a) : `<path d="${inkD(el)}" fill="${el.c}"${op}/>`;
   else if (el.w > 0) s += `<path d="${inkD(el)}" fill="none" stroke="${el.c}" stroke-width="${r2(el.w)}" stroke-linecap="round" stroke-linejoin="round"${op}/>`;
   return s;
 }
@@ -191,7 +193,7 @@ export function bbox(el) {
     if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
     if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
   }
-  const pad = el.w / 2;
+  const pad = (el.w / 2) * stylePad(el);
   return { x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad };
 }
 export function unionBox(els) {
@@ -336,7 +338,7 @@ function lerpEl(a, b, t) {
   const pts = pa.map((p, i) => { const q = pb[(i + best) % n]; return p.map((v, k) => v + ((q[k] ?? v) - v) * t); });
   const f = a.f && b.f ? lerpColor(a.f, b.f, t) : (t < 0.5 ? a.f : b.f);
   return {
-    t: a.t, pts, c: lerpColor(a.c, b.c, t), w: a.w + (b.w - a.w) * t, pr: a.pr,
+    t: a.t, pts, c: lerpColor(a.c, b.c, t), w: a.w + (b.w - a.w) * t, pr: a.pr, ...(a.st ? { st: a.st } : {}),
     a: (a.a ?? 1) + ((b.a ?? 1) - (a.a ?? 1)) * t, f, cl: a.cl,
   };
 }
@@ -366,4 +368,187 @@ export function mapPts(el, fn, wScale = 1) {
 
 export function cloneEl(el) {
   return { ...el, pts: el.pts.map((p) => p.slice()) };
+}
+
+/* ----------------------------------------------------------- brush styles
+   A brush stroke may carry a style `st` (missing = plain ink). Every style keeps the same centre
+   line and outline, so select, erase, tween and fill work the same; only the painting differs.
+   Each style is a list of passes over the stroke: a pass can widen it, wobble it sideways, soften
+   its edge (blur, in stage pixels), fade it, tint it, or give it a grain. */
+
+export const BRUSH_STYLES = ['ink', 'smoke', 'air', 'charcoal', 'water', 'glow'];
+
+const PASSES = {
+  //            width  wobble  freq  phase  blur   alpha  grow  tint  grain  edge
+  smoke: [
+    { w: 2.4, wob: 0.6, fq: 0.12, ph: 0.0, blur: 1.0, a: 0.13, grow: 1 },
+    { w: 0.75, wob: 0.9, fq: 0.22, ph: 1.7, blur: 0.32, a: 0.22, grow: 0.9 },
+    { w: 0.45, wob: -0.85, fq: 0.19, ph: 4.1, blur: 0.2, a: 0.25, grow: 0.7 },
+    { w: 0.3, wob: 1.25, fq: 0.31, ph: 2.6, blur: 0.12, a: 0.22, grow: 0.5 },
+    { w: 0.18, wob: 0.3, fq: 0.4, ph: 0.9, blur: 0.05, a: 0.28, grow: 0.2 },
+  ],
+  air: [
+    { w: 1.25, blur: 0.42, a: 0.55 },
+    { w: 0.6, blur: 0.2, a: 0.45 },
+  ],
+  charcoal: [
+    { w: 0.9, rough: 0.22, a: 0.35 },
+    { w: 1.1, rough: 0.35, grain: true, a: 1 },
+  ],
+  water: [
+    { w: 1, rough: 0.15, fq: 0.08, blur: 0.05, a: 0.3 },
+    { w: 0.8, wob: 0.12, fq: 0.15, ph: 2, rough: 0.12, blur: 0.12, a: 0.22 },
+    { w: 1, rough: 0.15, fq: 0.08, edge: 0.09, blur: 0.05, a: 0.55, shade: -0.3 },
+  ],
+  glow: [
+    { w: 1.6, blur: 1.1, a: 0.85 },
+    { w: 1, blur: 0.45, a: 0.9 },
+    { w: 0.55, a: 1, tint: 0.7 },
+  ],
+};
+const PAD = { smoke: 2.2, air: 1.4, glow: 2.4, water: 1.2, charcoal: 1.2 };
+export const stylePad = (el) => (el.st && PAD[el.st]) || 1;
+
+// Smooth, repeatable wobble (no randomness, so redraws, tweens and exports match).
+const wave = (s, fq, ph) => Math.sin(s * fq + ph) * 0.6 + Math.sin(s * fq * 2.3 + ph * 1.9 + 1.3) * 0.3 + Math.sin(s * fq * 5.1 + ph * 0.7) * 0.1;
+// Quick pseudo-random grain along the stroke (stable per position).
+const hashN = (i) => { const v = Math.sin(i * 12.9898 + 78.233) * 43758.5453; return v - Math.floor(v); };
+
+// The stroke reshaped for one pass, as a plain brush element (outline computed by brushOutline).
+function passEl(el, P) {
+  const pts = el.pts, n = pts.length, w = el.w;
+  if (!P.wob && !P.rough && !P.grow && P.w === 1 && !(P.blur >= 0.15)) return el;
+  // ms: how finely the outline is traced. Thin passes are traced as coarsely as the whole stroke,
+  // and blurred ones coarser still since the blur hides the detail. Points closer together than
+  // that are skipped, which keeps long strokes fast.
+  const ms = P.blur >= 0.15 ? Math.min(w * P.blur * 0.5, 12) : Math.min(w / 10, 4);
+  const out = [];
+  let kept = -Infinity;
+  let s = 0;
+  for (let i = 0; i < n; i++) {
+    const p = pts[i];
+    if (i) s += Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]);
+    let x = p[0], y = p[1];
+    // 0 at the start of the stroke, easing to 1 after ~15 widths. It only depends on the distance
+    // travelled, so the part already drawn keeps its shape while the stroke is still growing.
+    const far = 1 - Math.exp(-s / (w * 15));
+    const pr = el.pr ? (p[2] ?? 1) : 1;
+    if (P.wob) {
+      const a = pts[Math.max(0, i - 2)], b = pts[Math.min(n - 1, i + 2)];
+      const dx = b[0] - a[0], dy = b[1] - a[1], d = Math.hypot(dx, dy) || 1;
+      // Smoke drifts more the further it travels.
+      const off = P.wob * w * wave(s / w, P.fq, P.ph) * (0.4 + 0.9 * far) * (0.5 + 0.5 * pr);
+      x += (-dy / d) * off; y += (dx / d) * off;
+    }
+    let k = 1;
+    if (P.grow) k *= 1 - P.grow * 0.45 + P.grow * 0.9 * far; // thin at the start, billowing further on
+    if (P.rough) k *= 1 + P.rough * (P.fq ? wave(s / w, P.fq * 10, P.ph || 0) : hashN(Math.round(s * 0.7)) * 2 - 1);
+    if (s - kept < ms * 0.5 && i < n - 1) continue;
+    kept = s;
+    out.push([x, y, Math.max(0.05, pr * k)]);
+  }
+  return { t: 'b', pts: out, c: el.c, w: w * P.w, pr: true, a: 1, f: null, ms };
+}
+
+const passCache = new WeakMap();
+function passPaths(el) {
+  let c = passCache.get(el);
+  if (!c) {
+    c = PASSES[el.st].map((P) => {
+      const pe = passEl(el, P);
+      return { P, d: inkD(pe) };
+    });
+    passCache.set(el, c);
+  }
+  return c;
+}
+
+// Grain texture for charcoal: a tile of speckles, coloured per stroke colour.
+let grainTile = null;
+const grainPats = new Map();
+function grainPattern(ctx, color) {
+  if (!grainTile) {
+    grainTile = document.createElement('canvas');
+    grainTile.width = grainTile.height = 96;
+    const g = grainTile.getContext('2d'), im = g.createImageData(96, 96);
+    for (let i = 0; i < 96 * 96; i++) {
+      const v = hashN(i * 1.37 + 0.5), u = hashN(i * 0.73 + 9.1);
+      im.data[i * 4 + 3] = v < 0.7 ? Math.round(150 + u * 105) : Math.round(u * 40);
+    }
+    g.putImageData(im, 0, 0);
+  }
+  let pat = grainPats.get(color);
+  if (!pat) {
+    const t = document.createElement('canvas');
+    t.width = t.height = 96;
+    const g = t.getContext('2d');
+    g.drawImage(grainTile, 0, 0);
+    g.globalCompositeOperation = 'source-in';
+    g.fillStyle = color; g.fillRect(0, 0, 96, 96);
+    pat = { canvas: t };
+    if (grainPats.size > 40) grainPats.clear();
+    grainPats.set(color, pat);
+  }
+  return ctx.createPattern(pat.canvas, 'repeat');
+}
+
+const shade = (c, k) => (k > 0 ? lerpColor(c, '#ffffff', k) : lerpColor(c, '#000000', -k));
+const p2d = new WeakMap();
+function pathOf(rec) { let p = p2d.get(rec); if (!p) { p = new Path2D(rec.d); p2d.set(rec, p); } return p; }
+
+// Paint a styled brush stroke on a canvas. Blur uses a shadow cast from a copy drawn far off to the
+// side: it is fast on iPad and works on every Safari version (canvas filters do not).
+function drawStyled(ctx, el, a) {
+  const m = ctx.getTransform(), sc = Math.hypot(m.a, m.b) || 1;
+  for (const rec of passPaths(el)) {
+    const P = rec.P, alpha = a * P.a;
+    if (alpha <= 0.003) continue;
+    let col = el.c;
+    if (P.tint) col = shade(col, P.tint);
+    if (P.shade) col = shade(col, P.shade);
+    const path = pathOf(rec);
+    ctx.globalAlpha = alpha;
+    const blur = Math.min(80, (P.blur || 0) * el.w * sc); // very wide blurs cost a lot and look the same
+    if (blur > 0.6) {
+      const D = 20000; // device pixels
+      ctx.save();
+      ctx.shadowColor = col; ctx.shadowBlur = blur; ctx.shadowOffsetX = D; ctx.shadowOffsetY = 0;
+      ctx.translate(-D / sc, 0);
+      ctx.fillStyle = '#000';
+      if (P.edge) { ctx.strokeStyle = '#000'; ctx.lineWidth = P.edge * el.w; ctx.lineJoin = 'round'; ctx.stroke(path); }
+      else ctx.fill(path);
+      ctx.restore();
+    } else if (P.edge) {
+      ctx.strokeStyle = col; ctx.lineWidth = P.edge * el.w; ctx.lineJoin = 'round'; ctx.stroke(path);
+    } else {
+      ctx.fillStyle = P.grain ? grainPattern(ctx, col) : col;
+      ctx.fill(path);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+let svgSeq = 0;
+function styledSVG(el, a) {
+  let s = '';
+  for (const rec of passPaths(el)) {
+    const P = rec.P, alpha = a * P.a;
+    if (alpha <= 0.003) continue;
+    let col = el.c;
+    if (P.tint) col = shade(col, P.tint);
+    if (P.shade) col = shade(col, P.shade);
+    let filt = '', fa = '';
+    const sd = (P.blur || 0) * el.w / 2;
+    if (sd > 0.3 || P.grain) {
+      const id = `ifs${(++svgSeq).toString(36)}`;
+      let body = '';
+      if (P.grain) body = `<feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="1" seed="3" result="n"/><feColorMatrix in="n" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -3 2.1" result="m"/><feComposite in="SourceGraphic" in2="m" operator="in"/>`;
+      else body = `<feGaussianBlur stdDeviation="${r2(sd)}"/>`;
+      filt = `<filter id="${id}" x="-60%" y="-60%" width="220%" height="220%">${body}</filter>`;
+      fa = ` filter="url(#${id})"`;
+    }
+    const paint = P.edge ? `fill="none" stroke="${col}" stroke-width="${r2(P.edge * el.w)}" stroke-linejoin="round"` : `fill="${col}"`;
+    s += `${filt}<path d="${rec.d}" ${paint} opacity="${r2(alpha)}"${fa}/>`;
+  }
+  return s;
 }
