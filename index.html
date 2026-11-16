@@ -20,6 +20,7 @@
   <header id="topbar">
     <button class="tb" id="btnProjects" title="Projects"><span data-icon="folder"></span><span class="lbl">Projects</span></button>
     <button class="title" id="projName" title="Rename">Untitled</button>
+    <button class="tb save draft" id="btnSave" title="Save this animation (⌘S)"><span data-icon="save"></span><span class="lbl">Save</span></button>
     <div class="spacer"></div>
     <button class="tb icon" id="btnUndo" title="Undo (two-finger tap)"><span data-icon="undo"></span></button>
     <button class="tb icon" id="btnRedo" title="Redo (three-finger tap)"><span data-icon="redo"></span></button>
@@ -152,8 +153,29 @@
     <button class="primary" id="pNew">+ New animation</button>
     <label class="btn">Open file…<input type="file" id="pImport" hidden></label>
   </div>
+  <div class="pDraft" id="pDraft" hidden><span>The animation you have open isn’t saved yet.</span><button class="primary" id="pDraftSave">Save it…</button></div>
   <div id="pList"></div>
-  <p class="hint">Animations are saved on this iPad automatically. Use “Save file” now and then to keep a backup in Files or iCloud Drive.</p>
+  <p class="hint">After the first Save, every change is saved to that animation on this iPad automatically. Use “Save file” now and then to keep a backup in Files or iCloud Drive.</p>
+</dialog>
+
+<dialog id="dlgSave" class="small">
+  <form method="dialog" id="saveForm">
+    <div class="dlgHead"><h2>Save animation</h2><button type="button" class="x" data-close>✕</button></div>
+    <div class="form">
+      <label>Name <input id="saveName" type="text" maxlength="60" autocomplete="off" enterkeyhint="done"></label>
+      <p class="err" id="saveErr" hidden></p>
+    </div>
+    <p class="hint">After this, your changes save to this animation automatically.</p>
+    <div class="dlgFoot"><button type="button" data-close>Cancel</button><button class="primary" value="save">Save</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlgUnsaved" class="small">
+  <form method="dialog">
+    <div class="dlgHead"><h2>Save changes?</h2></div>
+    <p id="unsavedMsg"></p>
+    <div class="dlgFoot"><button value="discard" class="danger">Don’t save</button><span class="spacer"></span><button value="cancel">Cancel</button><button class="primary" value="save">Save…</button></div>
+  </form>
 </dialog>
 
 <dialog id="dlgSettings">

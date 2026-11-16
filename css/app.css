@@ -54,6 +54,10 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
 #topbar .tb.icon { padding: 6px 8px; }
 #topbar .title { background: transparent; border-color: transparent; font-weight: 600; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 #topbar .spacer { flex: 1; }
+#topbar .save { color: var(--muted); font-size: 13px; }
+#topbar .save.draft { color: var(--accent); border-color: var(--accent); }
+#topbar .save.error { color: #ff6b6b; border-color: #ff6b6b; }
+#topbar .save.saved .lbl::before { content: '✓ '; }
 #topbar .sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
 
 #main { flex: 1; display: flex; min-height: 0; }
@@ -151,6 +155,11 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
 .x { width: 36px; padding: 0; background: transparent; border-color: transparent; }
 .dlgBar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .dlgFoot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+.dlgFoot .spacer { flex: 1; }
+dialog.small { width: min(440px, 94vw); }
+button.danger { color: #ff6b6b; }
+.err { color: #ff8a8a; margin: 0; font-size: 13px; }
+.pDraft { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; margin-bottom: 12px; border: 1px dashed var(--accent); border-radius: 12px; flex-wrap: wrap; }
 h4 { margin: 14px 0 8px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
 .form { display: flex; flex-direction: column; gap: 10px; }
 .form > label:not(.toggle), .row2 > label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 13px; }
@@ -179,7 +188,7 @@ input[type=color] { height: 38px; width: 80px; padding: 2px; background: var(--p
 
 @media (max-width: 900px) {
   #panel { width: 196px; padding: 4px 8px 8px; }
-  #topbar .lbl { display: none; }
+  #topbar .tb:not(.save) .lbl { display: none; }
   .choices { grid-template-columns: 1fr; }
 }
 @media (max-height: 700px) { #timeline { height: 190px; } }
